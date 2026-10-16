@@ -459,7 +459,7 @@
   /* ===== الأجهزة ===== */
   function devicesTable(items, compact) {
     if (!items.length) return emptyState('cpu', 'لا توجد أجهزة مطابقة');
-    return '<div class="table-wrap"><table class="table"><thead><tr><th>رقم الأصل</th><th>الجهاز</th>' + (compact ? '' : '<th>المعمل</th>') + '<th>الحالة</th><th>المعايرة القادمة</th><th class="hide-sm">الضمان</th><th></th></tr></thead><tbody>' +
+    return '<div class="table-wrap"><table class="table stack"><thead><tr><th>رقم الأصل</th><th>الجهاز</th>' + (compact ? '' : '<th>المعمل</th>') + '<th>الحالة</th><th>المعايرة القادمة</th><th class="hide-sm">الضمان</th><th></th></tr></thead><tbody>' +
       items.map((d) => {
         const warrantyOk = d.warrantyEnd && d.warrantyEnd >= today();
         return '<tr><td><span class="tag">' + h(d.tag) + '</span></td><td><div class="cell-main">' + h(d.name) + '</div><div class="cell-sub">' + h(d.model) + '</div></td>' +
@@ -614,7 +614,7 @@
   /* ===== الحجوزات ===== */
   function bookingsTable(items, compact) {
     if (!items.length) return emptyState('calendar', 'لا توجد حجوزات في هذا القسم');
-    return '<div class="table-wrap"><table class="table"><thead><tr><th>الحجز</th>' + (compact ? '' : '<th>المعمل</th>') + '<th>الموعد</th><th class="hide-sm">مقدم الطلب</th><th>الحضور</th><th>الحالة</th><th></th></tr></thead><tbody>' +
+    return '<div class="table-wrap"><table class="table stack"><thead><tr><th>الحجز</th>' + (compact ? '' : '<th>المعمل</th>') + '<th>الموعد</th><th class="hide-sm">مقدم الطلب</th><th>الحضور</th><th>الحالة</th><th></th></tr></thead><tbody>' +
       items.map((b) => {
         const l = lab(b.labId) || { capacity: 0 };
         let acts = '<button class="icon-btn" data-act="viewBooking" data-id="' + b.id + '" title="التفاصيل" aria-label="التفاصيل">' + icon('eye') + '</button>';
@@ -793,7 +793,7 @@
   /* ===== الصيانة ===== */
   function ticketsTable(items, compact) {
     if (!items.length) return emptyState('wrench', 'لا توجد بلاغات في هذا القسم');
-    return '<div class="table-wrap"><table class="table"><thead><tr><th>الرقم</th><th>البلاغ</th>' + (compact ? '' : '<th>المعمل</th>') + '<th>الأولوية</th><th>الحالة</th><th class="hide-sm">المبلّغ</th><th class="hide-sm">التاريخ</th><th></th></tr></thead><tbody>' +
+    return '<div class="table-wrap"><table class="table stack"><thead><tr><th>الرقم</th><th>البلاغ</th>' + (compact ? '' : '<th>المعمل</th>') + '<th>الأولوية</th><th>الحالة</th><th class="hide-sm">المبلّغ</th><th class="hide-sm">التاريخ</th><th></th></tr></thead><tbody>' +
       items.map((t) => {
         const d = dev(t.deviceId);
         return '<tr><td><span class="tag">' + h(t.ref) + '</span></td><td><div class="cell-main">' + h(t.title) + '</div><div class="cell-sub">' + (d ? h(d.tag) + ' · ' + h(d.name) : 'عطل عام في المعمل') + '</div></td>' +
@@ -949,8 +949,8 @@
       const fill = lb.length ? Math.round(lb.reduce((s, b) => s + b.attendees / l.capacity, 0) / lb.length * 100) : 0;
       const u = labUtil(l, workdays);
       return '<tr><td><div class="cell-main">' + h(l.name) + '</div><div class="cell-sub">' + h(l.code) + '</div></td><td class="num">' + lb.length + '</td><td class="num">' + (Math.round(hrs * 10) / 10) + '</td>' +
-        '<td style="min-width:160px"><div style="display:flex;gap:8px;align-items:center"><div class="meter ' + meterCls(u) + '" style="flex:1"><span style="width:' + u + '%"></span></div><b class="num small">' + u + '%</b></div></td>' +
-        '<td class="num">' + fill + '%</td><td class="num">' + S.coll('tickets').filter((x) => x.labId === l.id && x.createdAt >= from && x.createdAt <= to).length + '</td></tr>';
+        '<td style="min-width:160px">' + (l.status !== 'active' && !lb.length ? pill(LAB_STATUS, l.status) : '<div style="display:flex;gap:8px;align-items:center"><div class="meter ' + meterCls(u) + '" style="flex:1"><span style="width:' + u + '%"></span></div><b class="num small">' + u + '%</b></div>') + '</td>' +
+        '<td class="num">' + (lb.length ? fill + '%' : '—') + '</td><td class="num">' + S.coll('tickets').filter((x) => x.labId === l.id && x.createdAt >= from && x.createdAt <= to).length + '</td></tr>';
     }).join('');
 
     const pri = Object.keys(TK_PRI).map((k) => ({ k, n: tks.filter((x) => x.priority === k).length }));
@@ -972,11 +972,75 @@
       card('بلاغات الصيانة حسب الأولوية', tks.length + ' بلاغًا في الفترة', '<div class="bars">' + pri.map((x) => '<div class="meter-row" style="grid-template-columns:90px minmax(0,1fr) 36px"><span>' + pill(TK_PRI, x.k) + '</span><div class="meter ' + (x.k === 'urgent' ? 'bad' : x.k === 'high' ? 'warn' : '') + '"><span style="width:' + Math.round(x.n / maxPri * 100) + '%"></span></div><span class="pct">' + x.n + '</span></div>').join('') + '</div>' +
         '<div class="muted small" style="margin-top:16px">' + tks.filter((x) => x.status === 'resolved').length + ' تم حلها · ' + tks.filter((x) => x.status !== 'resolved').length + ' مفتوحة</div>') +
       '</div>' +
-      card('أداء المعامل', 'الإشغال = الساعات المحجوزة ÷ ساعات الدوام · الامتلاء = متوسط الحضور ÷ السعة', '<div class="table-wrap"><table class="table"><thead><tr><th>المعمل</th><th>الحجوزات</th><th>الساعات</th><th>الإشغال</th><th>الامتلاء</th><th>البلاغات</th></tr></thead><tbody>' + rows + '</tbody></table></div>', '', true);
+      card('أداء المعامل', 'الإشغال = الساعات المحجوزة ÷ ساعات الدوام · الامتلاء = متوسط الحضور ÷ السعة', '<div class="table-wrap"><table class="table"><thead><tr><th>المعمل</th><th>الحجوزات</th><th>الساعات</th><th>الإشغال</th><th>الامتلاء</th><th>البلاغات</th></tr></thead><tbody>' + rows + '</tbody></table></div>', '', true) + reqReport(from, to);
     return {
       title: 'التقارير', crumb: 'الإدارة', html,
       mount(root) { root.querySelector('#rp-period').addEventListener('click', (e) => { const b = e.target.closest('[data-p]'); if (b) { f.period = b.dataset.p; render(); } }); }
     };
+  }
+
+  function reqReport(from, to) {
+    const depts = S.coll('departments').filter((d) => isAdmin() || d.name === me.dept);
+    if (!depts.length) return '';
+    const inRange = S.coll('requests').filter((r) => r.createdAt >= from && r.createdAt <= to);
+    const rows = depts.map((d) => {
+      const inc = inRange.filter((r) => r.toDept === d.name), out = inRange.filter((r) => r.fromDept === d.name);
+      const done = inc.filter((r) => r.status === 'done' && r.completedAt);
+      const avg = done.length ? done.reduce((s, r) => s + (U.parseDate(r.completedAt) - U.parseDate(r.createdAt)) / 864e5, 0) / done.length : null;
+      const late = inc.filter(rqLate).length, open = inc.filter(rqOpen).length;
+      return '<tr><td><div style="display:flex;gap:10px;align-items:center"><span class="tag">' + h(d.code) + '</span><span class="cell-main">' + h(d.name) + '</span></div></td><td class="num">' + inc.length + '</td><td class="num">' + out.length + '</td><td class="num">' + open + '</td><td class="num">' + done.length + '</td>' +
+        '<td>' + (late ? '<span class="pill bad">' + late + ' متأخر</span>' : '<span class="muted small">لا يوجد</span>') + '</td><td class="num">' + (avg === null ? '—' : Number.isInteger(Math.round(avg * 10) / 10) ? daysTxt(Math.round(avg)) : (Math.round(avg * 10) / 10) + ' يوم') + '</td></tr>';
+    }).join('');
+    const types = Object.keys(RQ_TYPE).map((k) => ({ label: RQ_TYPE[k][0], value: inRange.filter((r) => r.type === k && (isAdmin() || r.toDept === me.dept || r.fromDept === me.dept)).length }));
+    const maxT = Math.max(1, ...types.map((x) => x.value));
+    return '<div class="grid grid-2">' +
+      card('الطلبات بين الأقسام', 'وارد وصادر كل قسم في الفترة · مدة الإنجاز من الإرسال حتى الإكمال', '<div class="table-wrap"><table class="table"><thead><tr><th>القسم</th><th>وارد</th><th>صادر</th><th>مفتوح</th><th>مكتمل</th><th>متأخر</th><th>متوسط الإنجاز</th></tr></thead><tbody>' + rows + '</tbody></table></div>', '<a class="btn btn-sm" href="#requests">فتح الطلبات</a>', true) +
+      card('الطلبات حسب النوع', inRange.length + ' طلبًا في الفترة', '<div class="bars">' + types.map((x) => '<div class="meter-row" style="grid-template-columns:110px minmax(0,1fr) 36px"><span class="name">' + h(x.label) + '</span><div class="meter"><span style="width:' + Math.round(x.value / maxT * 100) + '%"></span></div><span class="pct">' + x.value + '</span></div>').join('') + '</div>') +
+      '</div>';
+  }
+
+  /* ===== الأقسام ===== */
+  function departmentsCard() {
+    const ds = S.coll('departments');
+    return card('الأقسام', ds.length + ' أقسام · رئيس القسم يبت في الطلبات الواردة لقسمه', '<div class="table-wrap"><table class="table stack"><thead><tr><th>القسم</th><th>رئيس القسم</th><th class="hide-sm">التحويلة</th><th class="hide-sm">المبنى</th><th>المعامل</th><th>المستخدمون</th><th></th></tr></thead><tbody>' +
+      ds.map((d) => {
+        const nl = S.coll('labs').filter((l) => l.dept === d.name).length, nu = S.coll('users').filter((u) => u.dept === d.name).length;
+        return '<tr><td><div style="display:flex;gap:10px;align-items:center"><div class="dcode" style="width:38px;height:38px;font-size:11px">' + h(d.code) + '</div><span class="cell-main">' + h(d.name) + '</span></div></td><td>' + h(userName(d.managerId)) + '</td><td class="hide-sm"><span class="mono">' + h(d.ext || '—') + '</span></td><td class="hide-sm">' + h(d.building || '—') + '</td><td class="num">' + nl + '</td><td class="num">' + nu + '</td>' +
+          '<td><div class="row-actions"><button class="icon-btn" data-act="editDept" data-id="' + d.id + '" title="تعديل" aria-label="تعديل">' + icon('edit') + '</button>' + (!nl && !nu ? '<button class="icon-btn" data-act="deleteDept" data-id="' + d.id + '" title="حذف" aria-label="حذف">' + icon('trash') + '</button>' : '') + '</div></td></tr>';
+      }).join('') + '</tbody></table></div>', '<button class="btn btn-sm" data-act="newDept">' + icon('plus') + 'إضافة قسم</button>', true);
+  }
+  function deptModal(existing) {
+    const mgrs = S.coll('users').filter((u) => u.active && u.role !== 'student').map((u) => ({ value: u.id, label: u.name + ' · ' + (u.dept || '') }));
+    const fields = [
+      { name: 'name', label: 'اسم القسم', required: true, span: true, placeholder: 'مثال: الرياضيات' },
+      { name: 'code', label: 'الرمز', required: true, ltr: true, placeholder: 'MATH', hint: 'حروف إنجليزية من 2 إلى 5' },
+      { name: 'ext', label: 'رقم التحويلة', ltr: true, placeholder: '2500' },
+      { name: 'managerId', label: 'رئيس القسم', type: 'select', options: mgrs, placeholder: 'بدون', span: true },
+      { name: 'building', label: 'المبنى', span: true, placeholder: 'مبنى 5' }
+    ];
+    U.modal({
+      title: existing ? 'تعديل القسم' : 'إضافة قسم', body: U.formGrid(fields, existing || {}), submitText: existing ? 'حفظ التعديلات' : 'إضافة القسم',
+      onSubmit(form) {
+        const d = U.formData(form);
+        if (!d.name) return 'اسم القسم مطلوب.';
+        d.code = (d.code || '').toUpperCase();
+        if (!/^[A-Z]{2,5}$/.test(d.code)) return 'الرمز من 2 إلى 5 حروف إنجليزية.';
+        if (S.coll('departments').some((x) => (x.code === d.code || x.name === d.name) && (!existing || x.id !== existing.id))) return 'يوجد قسم آخر بنفس الاسم أو الرمز.';
+        if (existing && existing.name !== d.name) {
+          // تحديث كل ما يشير إلى اسم القسم القديم
+          const oldN = existing.name;
+          S.coll('users').forEach((u) => { if (u.dept === oldN) u.dept = d.name; });
+          S.coll('labs').forEach((l) => { if (l.dept === oldN) l.dept = d.name; });
+          S.coll('requests').forEach((r) => { if (r.fromDept === oldN) r.fromDept = d.name; if (r.toDept === oldN) r.toDept = d.name; });
+          if (me.dept === oldN) me.dept = d.name;
+        }
+        if (existing) d.id = existing.id;
+        S.upsert('departments', d, 'D');
+        S.log(me.id, (existing ? 'عدّل بيانات قسم ' : 'أضاف قسم ') + d.name);
+        U.toast(existing ? 'تم حفظ التعديلات' : 'تمت إضافة القسم');
+        setTimeout(render);
+      }
+    });
   }
 
   /* ===== المستخدمون ===== */
@@ -988,6 +1052,7 @@
       '<section class="card"><div class="toolbar"><div class="search">' + icon('search') + '<input class="input" id="us-q" type="search" placeholder="ابحث بالاسم أو اسم المستخدم أو القسم" value="' + h(f.q) + '"></div>' +
       '<select class="select" id="us-role" aria-label="الدور"><option value="">كل الأدوار</option>' + optsOf(ROLE).map((o) => '<option value="' + o.value + '"' + (f.role === o.value ? ' selected' : '') + '>' + o.label + '</option>').join('') + '</select></div>' +
       '<div id="us-list"></div></section>' +
+      departmentsCard() +
       card('مصفوفة الصلاحيات', '', '<div class="table-wrap"><table class="table"><thead><tr><th>الصلاحية</th><th>مدير النظام</th><th>مشرف معمل</th><th>عضو هيئة تدريس</th><th>طالب</th></tr></thead><tbody>' +
         [['عرض المعامل والجدول', 1, 1, 1, 1], ['طلب حجز معمل', 1, 1, 1, 1], ['تأكيد الحجز مباشرة', 1, 'معامله', 0, 0], ['الموافقة على الطلبات', 1, 'معامله', 0, 0], ['إدارة الأجهزة', 1, 'معامله', 0, 0], ['الإبلاغ عن عطل', 1, 1, 1, 1], ['معالجة البلاغات', 1, 'معامله', 0, 0], ['التقارير', 1, 'معامله', 0, 0], ['إضافة وحذف المعامل', 1, 0, 0, 0], ['الطلبات بين الأقسام: الإرسال', 1, 1, 1, 0], ['الطلبات بين الأقسام: البت في الوارد', 1, 'قسمه', 'رئيس القسم', 0], ['إدارة المستخدمين', 1, 0, 0, 0]]
           .map((r) => '<tr><td>' + r[0] + '</td>' + r.slice(1).map((c) => '<td>' + (c === 1 ? '<span style="color:var(--ok)">' + icon('check').replace('<svg', '<svg width="18" height="18"') + '</span>' : c === 0 ? '<span class="muted">—</span>' : '<span class="small muted">' + c + (c === 'رئيس القسم' ? '' : ' فقط') + '</span>') + '</td>').join('') + '</tr>').join('') +
@@ -999,7 +1064,7 @@
         const draw = () => {
           const q = f.q.toLowerCase();
           const items = S.coll('users').filter((u) => (!f.role || u.role === f.role) && (!q || (u.name + ' ' + u.username + ' ' + u.dept + ' ' + u.email).toLowerCase().includes(q)));
-          list.innerHTML = items.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>المستخدم</th><th>اسم الدخول</th><th>الدور</th><th class="hide-sm">القسم</th><th class="hide-sm">التواصل</th><th>الحالة</th><th></th></tr></thead><tbody>' +
+          list.innerHTML = items.length ? '<div class="table-wrap"><table class="table stack"><thead><tr><th>المستخدم</th><th>اسم الدخول</th><th>الدور</th><th class="hide-sm">القسم</th><th class="hide-sm">التواصل</th><th>الحالة</th><th></th></tr></thead><tbody>' +
             items.map((u) => '<tr><td><div style="display:flex;gap:10px;align-items:center"><div class="avatar">' + h(U.initials(u.name)) + '</div><div class="cell-main">' + h(u.name) + (u.id === me.id ? ' <span class="muted small">(أنت)</span>' : '') + '</div></div></td>' +
               '<td><span class="mono">' + h(u.username) + '</span></td><td>' + pill(ROLE, u.role) + '</td><td class="hide-sm">' + h(u.dept) + '</td>' +
               '<td class="hide-sm small"><div class="ltr" style="text-align:right">' + h(u.email) + '</div><div class="muted ltr" style="text-align:right">' + h(u.phone || '') + '</div></td>' +
@@ -1569,6 +1634,12 @@
       const u = user(id); if (!u || u.id === me.id) return;
       U.confirmDialog({ title: 'حذف المستخدم', danger: true, confirmText: 'حذف', message: 'حذف حساب ' + u.name + '؟ تبقى حجوزاته وبلاغاته السابقة في السجل. يمكنك بدلًا من ذلك إيقاف الحساب.', onConfirm() { S.remove('users', id); S.log(me.id, 'حذف حساب ' + u.name); U.toast('تم حذف المستخدم'); setTimeout(render); } });
     },
+    newDept() { deptModal(); },
+    editDept(id) { const d = S.byId('departments', id); if (d) deptModal(d); },
+    deleteDept(id) {
+      const d = S.byId('departments', id); if (!d) return;
+      U.confirmDialog({ title: 'حذف القسم', danger: true, confirmText: 'حذف', message: 'حذف قسم ' + d.name + '؟ تبقى الطلبات السابقة المرتبطة به في السجل.', onConfirm() { S.remove('departments', id); U.toast('تم حذف القسم'); setTimeout(render); } });
+    },
     newRequest() { requestModal(); },
     reqAct(id) { const [rid, action] = id.split('|'); const r = S.byId('requests', rid); if (r) rqAct(r, action); },
     schedLab(id) { st.schedule.lab = id; st.schedule.week = 0; go('schedule'); },
@@ -1601,6 +1672,15 @@
     const onChange = () => { if (S.prefs.get('theme', 'system') === 'system' && me) render(); };
     if (mq.addEventListener) mq.addEventListener('change', onChange);
   }
+
+  /* على الجوال تتحول الجداول إلى بطاقات: كل خلية تأخذ عنوان عمودها */
+  function labelTables(root) {
+    root.querySelectorAll('table.stack').forEach((t) => {
+      const heads = [...t.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+      t.querySelectorAll('tbody tr').forEach((tr) => [...tr.children].forEach((td, i) => { if (!td.hasAttribute('data-label')) td.setAttribute('data-label', heads[i] || ''); }));
+    });
+  }
+  new MutationObserver(() => labelTables(document)).observe(document.getElementById('app'), { childList: true, subtree: true });
 
   document.documentElement.lang = 'ar';
   document.documentElement.dir = 'rtl';

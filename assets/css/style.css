@@ -579,6 +579,20 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
   .dl dd { margin-bottom: 10px; }
   .toolbar .select { flex: 1 1 140px; }
   .hide-sm { display: none; }
+  /* الجداول كبطاقات */
+  .table.stack thead { display: none; }
+  .table.stack, .table.stack tbody { display: block; width: 100%; }
+  .table.stack tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .table.stack tr:last-child { border-bottom: 0; }
+  .table.stack td { display: block; padding: 0; border: 0; min-width: 0; }
+  .table.stack td.hide-sm { display: none; }
+  .table.stack td[data-label]:not([data-label=""])::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+  .table.stack td:first-child { grid-column: 1 / -1; }
+  .table.stack td:first-child::before { display: none !important; }
+  .table.stack td:last-child { grid-column: 1 / -1; }
+  .table.stack td:last-child .row-actions { justify-content: flex-start; }
+  .table.stack tbody tr:hover td { background: transparent; }
+  .table-wrap:has(> .table.stack) { overflow-x: visible; }
   .rq-head, .route-band, .rq-section, .rq-actions, .composer { padding-left: 16px; padding-right: 16px; }
   .back-btn, .rq-banner { margin-left: 16px; margin-right: 16px; }
   .route-band { grid-template-columns: minmax(0, 1fr); gap: 4px; }
