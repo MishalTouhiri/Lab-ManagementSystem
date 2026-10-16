@@ -127,6 +127,8 @@
     const r = route();
     let view;
     if (r.startsWith('lab-')) view = viewLab(r.slice(4));
+    else if (r.startsWith('dev-')) view = viewDevicePage(r.slice(4));
+    else if (r.startsWith('tk-')) view = viewTicketPage(r.slice(3));
     else if (r.startsWith('req-')) {
       if (me.role === 'student') { location.replace('#dashboard'); return; }
       view = viewRequests(r.slice(4));
@@ -135,7 +137,7 @@
       if (!item || !allowed(item)) { location.replace('#dashboard'); return; }
       view = VIEWS[r]();
     }
-    renderShell(view, r.startsWith('lab-') ? 'labs' : r.startsWith('req-') ? 'requests' : r);
+    renderShell(view, r.startsWith('lab-') ? 'labs' : r.startsWith('req-') ? 'requests' : r.startsWith('dev-') ? 'devices' : r.startsWith('tk-') ? 'maintenance' : r);
   }
 
   function renderShell(view, active) {
@@ -192,10 +194,10 @@
     if (isStaff()) {
       S.coll('devices').filter((d) => managesLab(d.labId)).forEach((d) => {
         const c = calState(d);
-        if (c && c.days <= 7) out.push({ key: 'cal:' + d.id + ':' + d.calibrationDue + ':' + (c.days < 0), cls: c.days < 0 ? 'bad' : 'warn', icon: 'gauge', title: 'معايرة ' + (c.days < 0 ? 'متأخرة' : 'مستحقة') + ': ' + d.name, sub: d.tag + ' · ' + (c.days < 0 ? 'متأخرة ' + daysTxt(-c.days) : c.days === 0 ? 'اليوم' : 'خلال ' + daysTxt(c.days)), go: 'devices' });
+        if (c && c.days <= 7) out.push({ key: 'cal:' + d.id + ':' + d.calibrationDue + ':' + (c.days < 0), cls: c.days < 0 ? 'bad' : 'warn', icon: 'gauge', title: 'معايرة ' + (c.days < 0 ? 'متأخرة' : 'مستحقة') + ': ' + d.name, sub: d.tag + ' · ' + (c.days < 0 ? 'متأخرة ' + daysTxt(-c.days) : c.days === 0 ? 'اليوم' : 'خلال ' + daysTxt(c.days)), go: 'dev-' + d.id });
       });
       S.coll('tickets').filter((t) => t.status === 'open' && (t.priority === 'urgent' || t.priority === 'high') && managesLab(t.labId))
-        .forEach((t) => out.push({ key: 'tk:' + t.id, cls: 'bad', icon: 'wrench', title: 'بلاغ ' + TK_PRI[t.priority][0] + ': ' + t.title, sub: t.ref + ' · ' + labName(t.labId), go: 'maintenance' }));
+        .forEach((t) => out.push({ key: 'tk:' + t.id, cls: 'bad', icon: 'wrench', title: 'بلاغ ' + TK_PRI[t.priority][0] + ': ' + t.title, sub: t.ref + ' · ' + labName(t.labId), go: 'tk-' + t.id }));
     } else {
       S.coll('bookings').filter((b) => b.userId === me.id && b.date >= today() && (b.status === 'approved' || b.status === 'rejected')).sort(byStart).slice(0, 5)
         .forEach((b) => out.push({ key: 'my:' + b.id + ':' + b.status, cls: b.status === 'approved' ? 'info' : 'bad', icon: b.status === 'approved' ? 'check' : 'x', title: (b.status === 'approved' ? 'تم تأكيد حجزك: ' : 'تم رفض طلبك: ') + b.title, sub: labName(b.labId) + ' · ' + U.fmtDay(b.date), go: 'bookings' }));
@@ -409,7 +411,8 @@
       '<dt>إشغال الأسبوع</dt><dd><div style="display:flex;gap:10px;align-items:center;max-width:320px"><div class="meter ' + meterCls(p) + '" style="flex:1"><span style="width:' + p + '%"></span></div><b class="num">' + p + '%</b></div></dd>' +
       '</dl></div></section>';
 
-    const tabs = [['devices', 'الأجهزة', devs.length], ['bookings', 'حجوزات هذا الأسبوع', wk.length], ['tickets', 'سجل الصيانة', tix.length]];
+    const lev = labEvents(id);
+    const tabs = [['devices', 'الأجهزة', devs.length], ['log', 'سجل الأحداث', lev.length], ['bookings', 'حجوزات هذا الأسبوع', wk.length], ['tickets', 'بلاغات الصيانة', tix.length]];
     const html = info + '<section class="card"><div class="tabs" role="tablist">' + tabs.map((t) => '<button role="tab" data-tab="' + t[0] + '" class="' + (st.labTab === t[0] ? 'on' : '') + '">' + t[1] + '<span class="count">' + t[2] + '</span></button>').join('') + '</div><div id="lab-tab"></div></section>';
 
     return {
@@ -420,6 +423,7 @@
           root.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === st.labTab));
           if (st.labTab === 'devices') box.innerHTML = devicesTable(devs, true) + (managesLab(l.id) ? '<div style="padding:14px 20px;border-top:1px solid var(--line)"><button class="btn btn-sm" data-act="newDevice" data-id="' + l.id + '">' + icon('plus') + 'إضافة جهاز لهذا المعمل</button></div>' : '');
           else if (st.labTab === 'bookings') box.innerHTML = bookingsTable(wk, true);
+          else if (st.labTab === 'log') box.innerHTML = timeline(lev, true, 'لا توجد أحداث مسجلة لهذا المعمل');
           else box.innerHTML = ticketsTable(tix, true);
         };
         root.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { st.labTab = b.dataset.tab; draw(); }));
@@ -471,7 +475,7 @@
     return '<div class="table-wrap"><table class="table stack"><thead><tr><th>رقم الأصل</th><th>الجهاز</th>' + (compact ? '' : '<th>المعمل</th>') + '<th>الحالة</th><th>المعايرة القادمة</th><th class="hide-sm">الضمان</th><th></th></tr></thead><tbody>' +
       items.map((d) => {
         const warrantyOk = d.warrantyEnd && d.warrantyEnd >= today();
-        return '<tr><td><span class="tag">' + h(d.tag) + '</span></td><td><div class="cell-main">' + h(d.name) + '</div><div class="cell-sub">' + h(d.model) + '</div></td>' +
+        return '<tr><td><a class="tag" href="#dev-' + d.id + '">' + h(d.tag) + '</a></td><td><div class="cell-main"><a href="#dev-' + d.id + '" style="color:inherit;text-decoration:none">' + h(d.name) + '</a></div><div class="cell-sub">' + h(d.model) + '</div></td>' +
           (compact ? '' : '<td><a href="#lab-' + d.labId + '" style="color:inherit">' + h(labName(d.labId)) + '</a></td>') +
           '<td>' + pill(DEV_STATUS, d.status) + '</td><td>' + calPill(d) + '</td>' +
           '<td class="hide-sm small ' + (warrantyOk ? '' : 'muted') + '">' + (d.warrantyEnd ? (warrantyOk ? 'حتى ' : 'انتهى ') + U.fmtDate(d.warrantyEnd) : '—') + '</td>' +
@@ -543,27 +547,251 @@
         d.tag = d.tag.toUpperCase();
         if (S.coll('devices').some((x) => x.tag === d.tag && (!existing || x.id !== existing.id))) return 'رقم الأصل ' + d.tag + ' مسجل لجهاز آخر.';
         if (d.warrantyEnd && d.purchaseDate && d.warrantyEnd < d.purchaseDate) return 'نهاية الضمان لا يمكن أن تسبق تاريخ الشراء.';
-        if (existing) d.id = existing.id;
-        S.upsert('devices', d, 'dev');
+        const stamp = { at: nowISO(), userId: me.id };
+        if (existing) {
+          d.id = existing.id;
+          const entries = [];
+          if (existing.status !== d.status) entries.push({ kind: 'status', from: existing.status, to: d.status, text: '' });
+          if (existing.labId !== d.labId) entries.push({ kind: 'move', from: existing.labId, to: d.labId, text: '' });
+          const changed = fields.filter((f) => !['status', 'labId'].includes(f.name) && String(existing[f.name] || '') !== String(d[f.name] || '')).map((f) => f.label);
+          if (changed.length) entries.push({ kind: 'edit', text: 'عُدّل: ' + changed.join('، ') });
+          d.history = (existing.history || []).concat(entries.map((e) => Object.assign({}, stamp, e)));
+        } else d.history = [Object.assign({}, stamp, { kind: 'created', to: d.labId, text: '' })];
+        const saved = S.upsert('devices', d, 'dev');
         S.log(me.id, (existing ? 'عدّل بيانات الجهاز ' : 'أضاف الجهاز ') + d.tag);
         U.toast(existing ? 'تم حفظ التعديلات' : 'تمت إضافة الجهاز');
+        setTimeout(() => existing ? render() : go('dev-' + saved.id));
+      }
+    });
+  }
+
+  /* ===== تتبع الأجهزة: السجل والحالة والنقل ===== */
+  const nowISO = () => new Date().toISOString();
+  const fmtFull = (s) => { const d = new Date(s); return d.getDate() + ' ' + U.MONTHS[d.getMonth()] + ' ' + d.getFullYear() + ' · ' + U.fmtTime(pad(d.getHours()) + ':' + pad(d.getMinutes())); };
+  const addMonthsISO = (ds, n) => { const [y, m, dd] = ds.split('-').map(Number); return iso(new Date(y, m - 1 + n, dd)); };
+  function devPush(id, changes, entries) {
+    const d = dev(id); if (!d) return;
+    S.upsert('devices', Object.assign({}, d, changes || {}, { history: (d.history || []).concat(entries.map((e) => Object.assign({ at: nowISO(), userId: me.id }, e))) }));
+  }
+  function setDevStatus(id, to, text) { const d = dev(id); if (d && d.status !== to) devPush(id, { status: to }, [{ kind: 'status', from: d.status, to, text: text || '' }]); }
+  function moveDev(id, toLab, text) { const d = dev(id); if (d && d.labId !== toLab) devPush(id, { labId: toLab }, [{ kind: 'move', from: d.labId, to: toLab, text: text || '' }]); }
+
+  function deviceEvents(d) {
+    const ev = (d.history || []).map((e) => Object.assign({ d }, e));
+    S.coll('tickets').filter((t) => t.deviceId === d.id).forEach((t) => (t.log || []).filter((e) => e.kind === 'status').forEach((e) => ev.push({ d, at: e.at, userId: e.userId, kind: 'ticket', t, status: e.status, text: e.text })));
+    S.coll('requests').filter((r) => r.deviceId === d.id).forEach((r) => (r.log || []).filter((e) => e.kind === 'status' && ['new', 'approved', 'done', 'rejected'].includes(e.status)).forEach((e) => ev.push({ d, at: e.at, userId: e.userId, kind: 'request', r, status: e.status, text: e.text })));
+    return ev.sort((a, b) => b.at.localeCompare(a.at));
+  }
+  function eventHTML(e, withDevice) {
+    let ic = 'info', cls = '', title = '', sub = '', link = '', note = e.text || '';
+    if (e.kind === 'created') { ic = 'plus'; cls = 'info'; title = 'سُجّل الجهاز في ' + labName(e.to); }
+    else if (e.kind === 'status') { ic = e.to === 'working' ? 'check' : e.to === 'retired' ? 'x' : 'alert'; cls = (DEV_STATUS[e.to] || [])[1] || ''; title = 'تغيّرت الحالة إلى «' + (DEV_STATUS[e.to] || [e.to])[0] + '»'; sub = 'كانت: ' + (DEV_STATUS[e.from] || [e.from || '—'])[0]; }
+    else if (e.kind === 'move') { ic = 'swap'; cls = 'info'; title = 'نُقل إلى ' + labName(e.to); sub = 'من ' + labName(e.from); }
+    else if (e.kind === 'calibration') { ic = 'gauge'; cls = e.result === 'pass' ? 'ok' : 'bad'; title = 'معايرة ' + (e.result === 'pass' ? 'مطابقة' : 'غير مطابقة'); sub = [e.cert ? 'شهادة ' + e.cert : '', e.next ? 'المعايرة القادمة ' + U.fmtDate(e.next) : ''].filter(Boolean).join(' · '); }
+    else if (e.kind === 'edit') { ic = 'edit'; title = 'تعديل بيانات الجهاز'; sub = note; note = ''; }
+    else if (e.kind === 'ticket') { ic = 'wrench'; cls = e.status === 'resolved' ? 'ok' : e.status === 'open' ? 'bad' : 'warn'; title = { open: 'بلاغ عطل', in_progress: 'بدأت معالجة البلاغ', resolved: 'حُلّ البلاغ' }[e.status] + ' ' + e.t.ref; sub = e.t.title; link = 'tk-' + e.t.id; }
+    else if (e.kind === 'request') { ic = 'swap'; cls = e.status === 'done' ? 'ok' : e.status === 'rejected' ? 'bad' : 'info'; title = RQ_TYPE[e.r.type][0] + ': ' + RQ_STATUS[e.status][0] + ' · ' + e.r.ref; sub = e.r.fromDept + ' ← ' + e.r.toDept; link = 'req-' + e.r.id; }
+    return '<div class="tl-ev"><div class="tl-dot ' + cls + '">' + icon(ic) + '</div><div class="tl-body">' +
+      '<div class="tl-title">' + (withDevice && e.d ? '<a class="tag" href="#dev-' + e.d.id + '">' + h(e.d.tag) + '</a> ' : '') + (link ? '<a href="#' + link + '">' + h(title) + '</a>' : h(title)) + '</div>' +
+      (sub ? '<div class="tl-sub">' + h(sub) + '</div>' : '') + (note ? '<div class="tl-note">' + h(note) + '</div>' : '') +
+      '<div class="tl-meta">' + h(userName(e.userId)) + ' · ' + fmtFull(e.at) + '</div></div></div>';
+  }
+  const timeline = (events, withDevice, empty) => events.length ? '<div class="tl">' + events.map((e) => eventHTML(e, withDevice)).join('') + '</div>' : emptyState('clock', empty || 'لا توجد أحداث مسجلة');
+  function labEvents(labId) {
+    const ev = [];
+    S.coll('devices').filter((d) => d.labId === labId || (d.history || []).some((x) => x.kind === 'move' && x.from === labId)).forEach((d) => ev.push(...deviceEvents(d).filter((e) => e.kind !== 'request')));
+    S.coll('tickets').filter((t) => t.labId === labId && !t.deviceId).forEach((t) => (t.log || []).filter((e) => e.kind === 'status').forEach((e) => ev.push({ at: e.at, userId: e.userId, kind: 'ticket', t, status: e.status, text: e.text })));
+    const seen = new Set();
+    return ev.filter((e) => { const k = e.kind + e.at + (e.t ? e.t.id : '') + (e.d ? e.d.id : ''); if (seen.has(k)) return false; seen.add(k); return true; }).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 40);
+  }
+
+  function viewDevicePage(id) {
+    const d = dev(id);
+    if (!d) return { title: 'جهاز غير موجود', crumb: 'الأجهزة', html: '<div class="card">' + emptyState('cpu', 'لم يتم العثور على الجهاز. ربما تم حذفه.') + '<div style="text-align:center;padding-bottom:24px"><a class="btn" href="#devices">العودة إلى الأجهزة</a></div></div>' };
+    const l = lab(d.labId) || {};
+    const tix = S.coll('tickets').filter((t) => t.deviceId === d.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const openT = tix.filter((t) => t.status !== 'resolved');
+    const canM = managesLab(d.labId);
+    const c = calState(d);
+    const lastCal = (d.history || []).filter((e) => e.kind === 'calibration').pop();
+    const ageY = d.purchaseDate ? (U.parseDate(today()) - U.parseDate(d.purchaseDate)) / (365.25 * 864e5) : 0;
+    const warrantyOk = d.warrantyEnd && d.warrantyEnd >= today();
+    const fact = (k, v) => '<div class="fact"><span>' + h(k) + '</span><b>' + v + '</b></div>';
+    const events = deviceEvents(d);
+
+    const hero = '<section class="card"><div class="card-body dev-hero">' +
+      '<div class="asset-plate" aria-label="لوحة رقم الأصل"><span>رقم الأصل</span><b>' + h(d.tag) + '</b><small>S/N ' + h(d.serial || '—') + '</small><i class="barcode" aria-hidden="true"></i></div>' +
+      '<div style="flex:1;min-width:220px;display:flex;flex-direction:column;gap:6px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' + pill(DEV_STATUS, d.status) + '<span class="type-chip">' + icon('cpu') + h(DEV_TYPE[d.type] || d.type) + '</span>' + (openT.length ? '<span class="pill bad">' + openT.length + ' بلاغ مفتوح</span>' : '') + '</div>' +
+      '<h2 style="font-size:var(--fs-xl)">' + h(d.name) + '</h2><p class="muted small"><span class="ltr">' + h(d.model || '') + '</span> · <a href="#lab-' + d.labId + '">' + h(l.name || '—') + '</a></p></div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      (d.status !== 'retired' ? '<button class="btn btn-primary" data-act="reportDevice" data-id="' + d.id + '">' + icon('wrench') + 'إبلاغ عن عطل</button>' : '') +
+      (canM && d.status !== 'retired' ? '<button class="btn" data-act="recordCal" data-id="' + d.id + '">' + icon('gauge') + 'تسجيل معايرة</button>' : '') +
+      (canM ? '<button class="btn" data-act="editDevice" data-id="' + d.id + '">' + icon('edit') + 'تعديل</button>' : '') +
+      '</div></div>' +
+      '<div class="card-body" style="border-top:1px solid var(--line)"><div class="facts facts-4">' +
+      fact('المعمل', '<a href="#lab-' + d.labId + '">' + h(l.name || '—') + '</a>') +
+      fact('القسم', h(l.dept || '—')) +
+      fact('تاريخ الشراء', U.fmtDate(d.purchaseDate) + (ageY >= 0.1 ? ' <span class="muted small">(' + (Math.round(ageY * 10) / 10) + ' سنة)</span>' : '')) +
+      fact('الضمان', d.warrantyEnd ? (warrantyOk ? '<span class="pill ok">ساري حتى ' + U.fmtDate(d.warrantyEnd) + '</span>' : '<span class="pill">انتهى ' + U.fmtDate(d.warrantyEnd) + '</span>') : '—') +
+      fact('المعايرة القادمة', calPill(d) + (d.calibrationDue && c && c.days > 14 ? '' : d.calibrationDue ? ' <span class="muted small">' + U.fmtDate(d.calibrationDue) + '</span>' : '')) +
+      fact('آخر معايرة', lastCal ? U.fmtDate(lastCal.at.slice(0, 10)) + ' · ' + (lastCal.result === 'pass' ? 'مطابقة' : 'غير مطابقة') : '—') +
+      fact('عدد البلاغات', tix.length + (openT.length ? ' <span class="muted small">(' + openT.length + ' مفتوح)</span>' : '')) +
+      fact('المشرف المسؤول', h(userName(l.supervisorId))) +
+      '</div>' + (d.notes ? '<p class="small" style="margin-top:14px"><span class="muted">ملاحظات: </span>' + h(d.notes) + '</p>' : '') + '</div></section>';
+
+    const alerts = (c && c.days < 0 ? '<div class="alert bad">' + icon('gauge') + '<div class="grow"><b>المعايرة متأخرة ' + daysTxt(-c.days) + '.</b> لا يُنصح باستخدام الجهاز في القياسات حتى تتم معايرته.</div>' + (canM ? '<button class="btn btn-sm" data-act="recordCal" data-id="' + d.id + '">تسجيل معايرة</button>' : '') + '</div>' : '');
+
+    const ticketsCard = card('بلاغات الجهاز', tix.length ? countTxt(tix.length, 'بلاغ واحد', 'بلاغان', 'بلاغات', 'بلاغًا') : 'لا توجد بلاغات', tix.length ? '<div class="list">' + tix.map((t) => '<a class="list-item" href="#tk-' + t.id + '" style="color:inherit;text-decoration:none"><span class="tag">' + h(t.ref) + '</span><div class="grow"><b>' + h(t.title) + '</b><span>' + U.fmtDate(t.createdAt) + ' · ' + h(userName(t.reporterId)) + '</span></div>' + pill(TK_STATUS, t.status) + '</a>').join('') + '</div>' : emptyState('check', 'لم يُبلّغ عن أي عطل لهذا الجهاز'), '', true);
+
+    return {
+      title: d.name + ' · ' + d.tag, crumb: 'الأجهزة / ' + (l.code || ''),
+      html: alerts + hero + '<div class="grid grid-2">' + card('سجل الجهاز', events.length + ' حدثًا · من التسجيل حتى اليوم', timeline(events), '', true) + '<div style="display:flex;flex-direction:column;gap:20px;min-width:0">' + ticketsCard + '</div></div>'
+    };
+  }
+
+  function calModal(d) {
+    const fields = [
+      { name: 'date', label: 'تاريخ المعايرة', type: 'date', required: true, max: today() },
+      { name: 'result', label: 'النتيجة', type: 'select', required: true, options: [{ value: 'pass', label: 'مطابقة للمواصفات' }, { value: 'fail', label: 'غير مطابقة' }] },
+      { name: 'cert', label: 'رقم الشهادة', ltr: true, placeholder: 'CAL-2026-0418' },
+      { name: 'next', label: 'المعايرة القادمة', type: 'date', required: true, hint: 'عادة بعد 6 أو 12 شهرًا' },
+      { name: 'text', label: 'الجهة المعايرة والملاحظات', type: 'textarea', span: true, placeholder: 'مثال: مختبر المعايرة المعتمد، انحراف 0.2%' }
+    ];
+    U.modal({
+      title: 'تسجيل معايرة · ' + d.tag, body: U.formGrid(fields, { date: today(), result: 'pass', next: addMonthsISO(today(), 6) }), submitText: 'حفظ المعايرة',
+      onSubmit(form) {
+        const v = U.formData(form);
+        if (!v.date || v.date > today()) return 'تاريخ المعايرة لا يمكن أن يكون في المستقبل.';
+        if (!v.next || v.next <= v.date) return 'موعد المعايرة القادمة يجب أن يكون بعد تاريخ المعايرة.';
+        const [y, m, dd] = v.date.split('-').map(Number);
+        const at = new Date(y, m - 1, dd, new Date().getHours(), new Date().getMinutes()).toISOString();
+        const entries = [{ at, kind: 'calibration', result: v.result, cert: v.cert, next: v.next, text: v.text }];
+        const changes = { calibrationDue: v.next };
+        if (v.result === 'fail' && d.status === 'working') { changes.status = 'maintenance'; entries.push({ kind: 'status', from: d.status, to: 'maintenance', text: 'نتيجة المعايرة غير مطابقة' }); }
+        devPush(d.id, changes, entries);
+        S.log(me.id, 'سجّل معايرة ' + (v.result === 'pass' ? 'مطابقة' : 'غير مطابقة') + ' للجهاز ' + d.tag);
+        U.toast(v.result === 'pass' ? 'تم تسجيل المعايرة. القادمة ' + U.fmtDate(v.next) : 'سُجلت المعايرة وحُوّل الجهاز إلى الصيانة', v.result === 'pass' ? 'ok' : 'bad');
         setTimeout(render);
       }
     });
   }
 
-  function deviceView(d) {
-    const tix = S.coll('tickets').filter((t) => t.deviceId === d.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  /* ===== صفحة البلاغ ===== */
+  const TK_FLOW = {
+    start: { to: 'in_progress', verb: 'بدأ معالجة البلاغ', toast: 'بدأت معالجة البلاغ' },
+    resolve: { to: 'resolved', verb: 'أغلق البلاغ', toast: 'تم حل البلاغ', note: 'required', title: 'إغلاق البلاغ', label: 'الإجراء المتخذ لإصلاح العطل', btn: 'تأكيد الحل' },
+    reopen: { to: 'open', verb: 'أعاد فتح البلاغ', toast: 'أُعيد فتح البلاغ', note: 'required', title: 'إعادة فتح البلاغ', label: 'سبب إعادة الفتح', btn: 'إعادة فتح' }
+  };
+  const canSeeTicket = (t) => isAdmin() || managesLab(t.labId) || t.reporterId === me.id || (isStaff() && t.assigneeId === me.id);
+  function tkApply(t, action, text) {
+    const fl = TK_FLOW[action];
+    const upd = Object.assign({}, t, { status: fl.to, resolvedAt: fl.to === 'resolved' ? today() : fl.to === 'open' ? '' : t.resolvedAt, log: (t.log || []).concat([{ at: nowISO(), userId: me.id, kind: 'status', status: fl.to, text: text || '' }]) });
+    if (action === 'resolve') upd.resolution = text;
+    if (action === 'start' && !t.assigneeId) upd.assigneeId = me.id;
+    S.upsert('tickets', upd);
+    const d = dev(t.deviceId);
+    let extra = '';
+    if (d && fl.to === 'resolved' && (d.status === 'maintenance' || d.status === 'broken')) {
+      const stillOpen = S.coll('tickets').some((x) => x.id !== t.id && x.deviceId === d.id && x.status !== 'resolved');
+      if (!stillOpen) { setDevStatus(d.id, 'working', 'بعد حل البلاغ ' + t.ref); extra = ' وعاد الجهاز للخدمة'; }
+    }
+    if (d && fl.to === 'open' && d.status === 'working') setDevStatus(d.id, 'maintenance', 'إعادة فتح البلاغ ' + t.ref);
+    S.log(me.id, fl.verb + ' ' + t.ref + ' «' + t.title + '»');
+    U.toast(fl.toast + extra);
+    setTimeout(render);
+    return '';
+  }
+  function tkAct(t, action) {
+    if (action === 'assign') {
+      const staff = S.coll('users').filter((u) => u.active && (u.role === 'admin' || u.role === 'supervisor')).map((u) => ({ value: u.id, label: u.name + ' · ' + ROLE[u.role][0] }));
+      U.modal({
+        title: 'تحويل البلاغ ' + t.ref, size: 'sm', body: U.field({ name: 'to', label: 'المسؤول عن المعالجة', type: 'select', options: staff, required: true }, t.assigneeId) + U.field({ name: 'text', label: 'ملاحظة', type: 'textarea', placeholder: 'اختياري' }), submitText: 'تحويل',
+        onSubmit(form) {
+          const v = U.formData(form);
+          if (!v.to) return 'اختر المسؤول.';
+          if (v.to === t.assigneeId) return 'البلاغ مسند إلى ' + userName(v.to) + ' بالفعل.';
+          S.upsert('tickets', Object.assign({}, t, { assigneeId: v.to, log: (t.log || []).concat([{ at: nowISO(), userId: me.id, kind: 'assign', to: v.to, text: v.text || '' }]) }));
+          S.log(me.id, 'حوّل البلاغ ' + t.ref + ' إلى ' + userName(v.to));
+          U.toast('تم تحويل البلاغ إلى ' + userName(v.to));
+          setTimeout(render);
+        }
+      });
+      return;
+    }
+    const fl = TK_FLOW[action];
+    if (!fl) return;
+    if (!fl.note) { tkApply(t, action); return; }
     U.modal({
-      title: d.name,
-      body: '<dl class="dl"><dt>رقم الأصل</dt><dd><span class="tag">' + h(d.tag) + '</span></dd><dt>الحالة</dt><dd>' + pill(DEV_STATUS, d.status) + '</dd><dt>المعمل</dt><dd>' + h(labName(d.labId)) + '</dd><dt>التصنيف</dt><dd>' + h(DEV_TYPE[d.type] || d.type) + '</dd>' +
-        '<dt>الطراز</dt><dd class="ltr" style="text-align:right">' + h(d.model || '—') + '</dd><dt>الرقم التسلسلي</dt><dd><span class="mono">' + h(d.serial || '—') + '</span></dd>' +
-        '<dt>تاريخ الشراء</dt><dd>' + U.fmtDate(d.purchaseDate) + '</dd><dt>نهاية الضمان</dt><dd>' + U.fmtDate(d.warrantyEnd) + '</dd><dt>المعايرة القادمة</dt><dd>' + calPill(d) + (d.calibrationDue ? ' <span class="muted small">' + U.fmtDate(d.calibrationDue) + '</span>' : '') + '</dd>' +
-        '<dt>ملاحظات</dt><dd>' + h(d.notes || '—') + '</dd></dl>' +
-        '<div><h4 style="font-size:var(--fs-sm);margin-bottom:8px">سجل الصيانة (' + tix.length + ')</h4>' + (tix.length ? '<div class="list" style="border:1px solid var(--line);border-radius:8px">' + tix.map((t) => '<div class="list-item" style="padding:10px 14px"><span class="tag">' + t.ref + '</span><div class="grow"><b>' + h(t.title) + '</b><span>' + U.fmtDate(t.createdAt) + '</span></div>' + pill(TK_STATUS, t.status) + '</div>').join('') + '</div>' : '<p class="muted small">لا توجد بلاغات سابقة لهذا الجهاز.</p>') + '</div>',
-      extraFoot: (d.status !== 'retired' ? '<button class="btn" data-act="reportDevice" data-id="' + d.id + '">' + icon('wrench') + 'إبلاغ عن عطل</button>' : '') +
-        (managesLab(d.labId) ? '<button class="btn btn-primary" data-act="editDevice" data-id="' + d.id + '">' + icon('edit') + 'تعديل</button>' : '')
+      title: fl.title + ' · ' + t.ref, size: 'sm',
+      body: '<p class="small">«' + h(t.title) + '»</p>' + U.field({ name: 'note', label: fl.label, type: 'textarea', required: true, placeholder: action === 'resolve' ? 'مثال: استبدال وحدة التخزين واختبار الجهاز 30 دقيقة' : '' }),
+      submitText: fl.btn, submitClass: action === 'resolve' ? 'btn-ok' : 'btn-primary',
+      onSubmit(form) { const text = U.formData(form).note; if (!text) return 'اكتب ' + fl.label + '.'; return tkApply(t, action, text); }
     });
+  }
+
+  function viewTicketPage(id) {
+    const t = S.byId('tickets', id);
+    if (!t || !canSeeTicket(t)) return { title: 'بلاغ غير موجود', crumb: 'الصيانة', html: '<div class="card">' + emptyState('wrench', 'البلاغ غير موجود أو ليس لديك صلاحية عرضه') + '<div style="text-align:center;padding-bottom:24px"><a class="btn" href="#maintenance">العودة إلى البلاغات</a></div></div>' };
+    const d = dev(t.deviceId), l = lab(t.labId) || {};
+    const log = t.log || [];
+    const can = managesLab(t.labId);
+    const stamp = (st0) => { const e = log.filter((x) => x.kind === 'status' && x.status === st0).pop(); return e ? fmtStamp(e.at) : ''; };
+    const steps = [['الإبلاغ', stamp('open')], ['المعالجة', stamp('in_progress')], ['الحل', stamp('resolved')]];
+    const cur = t.status === 'resolved' ? 3 : 1;
+    const hint = t.status === 'open' ? 'بانتظار البدء' : t.status === 'in_progress' ? 'جارية' : '';
+    const stepper = '<div class="stepper" style="grid-template-columns:repeat(3,minmax(0,1fr))">' + steps.map((s, i) => {
+      const cls = i < cur ? 'done' : i === cur ? 'cur' : '';
+      return '<div class="step ' + cls + '"><div class="dot">' + (i < cur ? icon('check') : i + 1) + '</div><div>' + s[0] + ((i < cur ? s[1] : i === cur ? hint : '') ? '<small>' + h(i < cur ? s[1] : hint) + '</small>' : '') + '</div></div>';
+    }).join('') + '</div>';
+    const btn = (a, label, cls, ic) => '<button class="btn ' + (cls || '') + '" data-act="tkAct" data-id="' + t.id + '|' + a + '">' + (ic ? icon(ic) : '') + label + '</button>';
+    let b = '';
+    if (can) {
+      if (t.status === 'open') b += btn('start', 'بدء المعالجة', 'btn-primary', 'refresh');
+      if (t.status !== 'resolved') b += btn('resolve', 'تم الحل', 'btn-ok', 'check') + btn('assign', 'تحويل', '', 'users');
+      if (t.status === 'resolved') b += btn('reopen', 'إعادة فتح', '', 'refresh');
+    }
+    const note = t.status === 'resolved' ? 'البلاغ مغلق' : 'المسؤول: ' + userName(t.assigneeId);
+    const created = log[0] ? log[0].at : t.createdAt;
+    const endDate = t.resolvedAt || today();
+    const days = Math.round((U.parseDate(endDate) - U.parseDate(t.createdAt)) / 864e5);
+    const fact = (k, v) => '<div class="fact"><span>' + h(k) + '</span><b>' + v + '</b></div>';
+    const thread = log.length ? '<div class="thread">' + log.map((e) => {
+      const u = user(e.userId) || { name: '—' };
+      if (e.kind === 'comment') return '<div class="ev"><div class="avatar">' + h(U.initials(u.name)) + '</div><div style="min-width:0"><div class="hd"><b>' + h(u.name) + '</b><time>' + U.timeAgo(e.at) + '</time></div><div class="bubble">' + h(e.text) + '</div></div></div>';
+      const verb = e.kind === 'assign' ? 'حوّل البلاغ إلى ' + userName(e.to) : { open: log.indexOf(e) === 0 ? 'أبلغ عن العطل' : 'أعاد فتح البلاغ', in_progress: 'بدأ المعالجة', resolved: 'أغلق البلاغ' }[e.status];
+      return '<div class="ev sys"><div class="avatar">' + icon(e.kind === 'assign' ? 'users' : e.status === 'resolved' ? 'check' : e.status === 'open' ? 'alert' : 'refresh').replace('<svg', '<svg width="15" height="15"') + '</div><div style="min-width:0"><div class="hd"><b>' + h(u.name) + '</b><span>' + h(verb) + '</span>' + (e.kind === 'status' ? pill(TK_STATUS, e.status) : '') + '<time>' + U.timeAgo(e.at) + '</time></div>' + (e.text ? '<div class="bubble">' + h(e.text) + '</div>' : '') + '</div></div>';
+    }).join('') + '</div>' : '';
+
+    const html = '<section class="card req-detail" style="max-width:980px">' +
+      '<a class="btn btn-sm" href="#maintenance" style="margin:14px 24px 0">' + icon('chevronR') + 'كل البلاغات</a>' +
+      '<div class="rq-head"><div class="top"><span class="tag">' + h(t.ref) + '</span>' + pill(TK_PRI, t.priority) + pill(TK_STATUS, t.status) + '</div><h2>' + h(t.title) + '</h2><div class="meta">أبلغ عنه ' + h(userName(t.reporterId)) + ' · ' + U.timeAgo(created) + ' · ' + h(l.name || '') + '</div></div>' +
+      '<div class="route-band" style="grid-template-columns:minmax(0,1fr)">' + (d ?
+        '<a class="dept-box" href="#dev-' + d.id + '" style="color:inherit;text-decoration:none"><div class="dcode" style="width:auto;padding:0 8px;font-size:11px">' + h(d.tag) + '</div><div><span class="lbl">الجهاز المعني · اضغط لعرض سجله</span><b>' + h(d.name) + '</b><div class="who">' + h(d.model || '') + ' · ' + h(l.name || '') + '</div></div><span style="margin-inline-start:auto">' + pill(DEV_STATUS, d.status) + '</span></a>'
+        : '<div class="dept-box"><div class="dcode">' + h((l.code || '').split('-')[0]) + '</div><div><span class="lbl">عطل عام في المعمل</span><b>' + h(l.name || '—') + '</b><div class="who">' + h((l.building || '') + ' · قاعة ' + (l.room || '')) + '</div></div></div>') + '</div>' +
+      stepper +
+      (t.status === 'resolved' && t.resolution ? '<div class="alert rq-banner" style="background:var(--ok-soft);color:var(--ok)">' + icon('check') + '<div class="grow"><b>الإجراء المتخذ:</b> ' + h(t.resolution) + '</div></div><div style="height:16px"></div>' : t.priority === 'urgent' && t.status !== 'resolved' ? '<div class="alert bad rq-banner">' + icon('alert') + '<div class="grow"><b>بلاغ عاجل</b>، مفتوح منذ ' + (days ? daysTxt(days) : 'اليوم') + '.</div></div><div style="height:16px"></div>' : '') +
+      '<div class="rq-actions"><span class="note">' + icon('info') + h(note) + '</span>' + b + '</div>' +
+      '<div class="rq-section"><h3>تفاصيل البلاغ</h3><div class="facts">' + fact('المعمل', '<a href="#lab-' + t.labId + '">' + h(l.name || '—') + '</a>') + fact('المبلّغ', h(userName(t.reporterId))) + fact('المسؤول', h(userName(t.assigneeId))) +
+      fact('تاريخ البلاغ', U.fmtDate(t.createdAt)) + fact(t.status === 'resolved' ? 'تاريخ الحل' : 'مفتوح منذ', t.status === 'resolved' ? U.fmtDate(t.resolvedAt) : (days ? daysTxt(days) : 'اليوم')) + fact('مدة المعالجة', t.status === 'resolved' ? (days ? daysTxt(days) : 'في نفس اليوم') : '—') + '</div></div>' +
+      (t.description ? '<div class="rq-section"><h3>وصف العطل</h3><p class="rq-desc">' + h(t.description) + '</p></div>' : '') +
+      '<div class="rq-section"><h3>خطوات المعالجة والمراسلات</h3>' + thread + '</div>' +
+      '<form class="composer" id="tk-comment" data-id="' + t.id + '"><textarea class="textarea" name="text" id="tk-text" placeholder="اكتب تحديثًا أو استفسارًا…" aria-label="الرد"></textarea><button class="btn btn-primary" type="submit">' + icon('send') + 'إرسال</button></form>' +
+      '</section>';
+    return {
+      title: t.ref + ' · ' + t.title, crumb: 'الصيانة والأعطال', html,
+      mount(root) {
+        const form = root.querySelector('#tk-comment');
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const text = (form.querySelector('textarea').value || '').trim();
+          if (!text) return;
+          const cur0 = S.byId('tickets', t.id);
+          S.upsert('tickets', Object.assign({}, cur0, { log: (cur0.log || []).concat([{ at: nowISO(), userId: me.id, kind: 'comment', text }]) }));
+          U.toast('تم إرسال التحديث');
+          render();
+        });
+      }
+    };
   }
 
   /* ===== الجدول الأسبوعي ===== */
@@ -805,7 +1033,7 @@
     return '<div class="table-wrap"><table class="table stack"><thead><tr><th>الرقم</th><th>البلاغ</th>' + (compact ? '' : '<th>المعمل</th>') + '<th>الأولوية</th><th>الحالة</th><th class="hide-sm">المبلّغ</th><th class="hide-sm">التاريخ</th><th></th></tr></thead><tbody>' +
       items.map((t) => {
         const d = dev(t.deviceId);
-        return '<tr><td><span class="tag">' + h(t.ref) + '</span></td><td><div class="cell-main">' + h(t.title) + '</div><div class="cell-sub">' + (d ? h(d.tag) + ' · ' + h(d.name) : 'عطل عام في المعمل') + '</div></td>' +
+        return '<tr><td><a class="tag" href="#tk-' + t.id + '">' + h(t.ref) + '</a></td><td><div class="cell-main"><a href="#tk-' + t.id + '" style="color:inherit;text-decoration:none">' + h(t.title) + '</a></div><div class="cell-sub">' + (d ? h(d.tag) + ' · ' + h(d.name) : 'عطل عام في المعمل') + '</div></td>' +
           (compact ? '' : '<td>' + h(labName(t.labId)) + '</td>') +
           '<td>' + pill(TK_PRI, t.priority) + '</td><td>' + pill(TK_STATUS, t.status) + '</td>' +
           '<td class="hide-sm">' + h(userName(t.reporterId)) + '</td><td class="hide-sm small" style="white-space:nowrap">' + U.fmtDate(t.createdAt) + '</td>' +
@@ -880,51 +1108,15 @@
         if (!d.labId) return 'اختر المعمل.';
         if (!d.title) return 'اكتب وصفًا مختصرًا للعطل.';
         const l = lab(d.labId);
-        const tk = { ref: S.nextTicketRef(), labId: d.labId, deviceId: d.deviceId || '', title: d.title, description: d.description || '', priority: d.priority, status: 'open', reporterId: me.id, assigneeId: l.supervisorId, createdAt: today(), resolvedAt: '' };
-        S.upsert('tickets', tk, 'tk');
+        const tk = { ref: S.nextTicketRef(), labId: d.labId, deviceId: d.deviceId || '', title: d.title, description: d.description || '', priority: d.priority, status: 'open', reporterId: me.id, assigneeId: l.supervisorId, createdAt: today(), resolvedAt: '', log: [{ at: nowISO(), userId: me.id, kind: 'status', status: 'open', text: '' }] };
+        const saved = S.upsert('tickets', tk, 'tk');
         const dv = dev(tk.deviceId);
-        if (dv && dv.status === 'working') S.upsert('devices', Object.assign({}, dv, { status: tk.priority === 'urgent' ? 'broken' : 'maintenance' }));
+        if (dv && dv.status === 'working') setDevStatus(dv.id, tk.priority === 'urgent' ? 'broken' : 'maintenance', 'بسبب البلاغ ' + tk.ref);
         S.log(me.id, 'فتح بلاغ صيانة ' + tk.ref + ' «' + tk.title + '»');
-        U.toast('تم إرسال البلاغ ' + tk.ref);
-        setTimeout(render);
+        U.toast('تم إرسال البلاغ ' + tk.ref + ' إلى ' + userName(l.supervisorId));
+        setTimeout(() => go('tk-' + saved.id));
       }
     });
-  }
-
-  function ticketView(t) {
-    const d = dev(t.deviceId);
-    const can = managesLab(t.labId);
-    let foot = '';
-    if (can) {
-      if (t.status === 'open') foot += '<button class="btn btn-primary" data-act="ticketStatus" data-id="' + t.id + '|in_progress">بدء المعالجة</button>';
-      if (t.status !== 'resolved') foot += '<button class="btn btn-ok" data-act="ticketStatus" data-id="' + t.id + '|resolved">' + icon('check') + 'تم الحل</button>';
-      if (t.status === 'resolved') foot += '<button class="btn" data-act="ticketStatus" data-id="' + t.id + '|open">' + icon('refresh') + 'إعادة فتح</button>';
-    }
-    const steps = [['open', 'استلام البلاغ'], ['in_progress', 'قيد المعالجة'], ['resolved', 'تم الحل']];
-    const idx = steps.findIndex((s) => s[0] === t.status);
-    U.modal({
-      title: t.ref + ' · ' + t.title,
-      body: '<div style="display:flex;gap:6px">' + steps.map((s, i) => '<div style="flex:1"><div class="meter" style="height:5px"><span style="width:' + (i <= idx ? 100 : 0) + '%"></span></div><div class="small ' + (i <= idx ? '' : 'muted') + '" style="margin-top:6px">' + s[1] + '</div></div>').join('') + '</div>' +
-        '<dl class="dl"><dt>الأولوية</dt><dd>' + pill(TK_PRI, t.priority) + '</dd><dt>الحالة</dt><dd>' + pill(TK_STATUS, t.status) + '</dd><dt>المعمل</dt><dd>' + h(labName(t.labId)) + '</dd>' +
-        '<dt>الجهاز</dt><dd>' + (d ? '<span class="tag">' + h(d.tag) + '</span> ' + h(d.name) + ' · ' + pill(DEV_STATUS, d.status) : 'عطل عام في المعمل') + '</dd>' +
-        '<dt>المبلّغ</dt><dd>' + h(userName(t.reporterId)) + '</dd><dt>المسؤول</dt><dd>' + h(userName(t.assigneeId)) + '</dd>' +
-        '<dt>تاريخ البلاغ</dt><dd>' + U.fmtDate(t.createdAt) + '</dd>' + (t.resolvedAt ? '<dt>تاريخ الحل</dt><dd>' + U.fmtDate(t.resolvedAt) + '</dd>' : '') +
-        '<dt>التفاصيل</dt><dd>' + h(t.description || '—') + '</dd></dl>',
-      extraFoot: foot
-    });
-  }
-  function setTicketStatus(t, status) {
-    const upd = Object.assign({}, t, { status, resolvedAt: status === 'resolved' ? today() : '' });
-    S.upsert('tickets', upd);
-    const d = dev(t.deviceId);
-    if (d && status === 'resolved' && (d.status === 'maintenance' || d.status === 'broken')) {
-      const stillOpen = S.coll('tickets').some((x) => x.id !== t.id && x.deviceId === d.id && x.status !== 'resolved');
-      if (!stillOpen) S.upsert('devices', Object.assign({}, d, { status: 'working' }));
-    }
-    if (d && status === 'open' && d.status === 'working') S.upsert('devices', Object.assign({}, d, { status: 'maintenance' }));
-    S.log(me.id, { in_progress: 'بدأ معالجة ', resolved: 'أغلق ', open: 'أعاد فتح ' }[status] + 'البلاغ ' + t.ref);
-    U.toast({ in_progress: 'بدأت معالجة البلاغ', resolved: 'تم إغلاق البلاغ وإعادة الجهاز للخدمة', open: 'أعيد فتح البلاغ' }[status]);
-    setTimeout(render);
   }
 
   /* ===== التقارير ===== */
@@ -1433,7 +1625,7 @@
     }
     if (action === 'done' && r.type === 'transfer' && r.deviceId && r.targetLabId) {
       const d = dev(r.deviceId);
-      if (d) { S.upsert('devices', Object.assign({}, d, { labId: r.targetLabId })); extra = ' ونُقل الجهاز ' + d.tag + ' إلى ' + labName(r.targetLabId); }
+      if (d) { moveDev(d.id, r.targetLabId, 'بموجب الطلب ' + r.ref); extra = ' ونُقل الجهاز ' + d.tag + ' إلى ' + labName(r.targetLabId); }
     }
     S.upsert('requests', upd);
     S.log(me.id, fl.verb + ' ' + r.ref + ' «' + r.title + '»');
@@ -1561,10 +1753,10 @@
     if (pages.length) groups.push(['الصفحات', pages.slice(0, q ? 4 : 10)]);
     if (!q) return groups;
     const labsR = S.coll('labs').filter((l) => has(l.name, l.code, l.building, l.room)).map((l) => ({ icon: 'flask', title: l.name, sub: l.code + ' · ' + l.building + ' · ' + LAB_STATUS[l.status][0], go: 'lab-' + l.id }));
-    const devR = S.coll('devices').filter((d) => has(d.tag, d.name, d.model, d.serial)).map((d) => ({ icon: 'cpu', title: d.name + ' · ' + d.tag, sub: labName(d.labId) + ' · ' + DEV_STATUS[d.status][0], act: 'viewDevice', id: d.id }));
+    const devR = S.coll('devices').filter((d) => has(d.tag, d.name, d.model, d.serial)).map((d) => ({ icon: 'cpu', title: d.name + ' · ' + d.tag, sub: labName(d.labId) + ' · ' + DEV_STATUS[d.status][0], go: 'dev-' + d.id }));
     const reqR = me.role === 'student' ? [] : S.coll('requests').filter(rqVisible).filter((r) => has(r.ref, r.title, r.fromDept, r.toDept)).map((r) => ({ icon: RQ_TYPE[r.type][1], title: r.title, sub: r.ref + ' · ' + r.fromDept + ' ← ' + r.toDept + ' · ' + RQ_STATUS[r.status][0], go: 'req-' + r.id }));
     const bkR = S.coll('bookings').filter((b) => (isAdmin() || b.userId === me.id || managesLab(b.labId) || b.status === 'approved') && b.date >= today() && has(b.title)).sort(byStart).map((b) => ({ icon: 'calendar', title: b.title, sub: labName(b.labId) + ' · ' + U.fmtDay(b.date) + ' · ' + U.fmtTime(b.start), act: 'viewBooking', id: b.id }));
-    const tkR = S.coll('tickets').filter((t) => (isStaff() || t.reporterId === me.id) && has(t.ref, t.title)).map((t) => ({ icon: 'wrench', title: t.title, sub: t.ref + ' · ' + labName(t.labId) + ' · ' + TK_STATUS[t.status][0], act: 'viewTicket', id: t.id }));
+    const tkR = S.coll('tickets').filter((t) => (isStaff() || t.reporterId === me.id) && has(t.ref, t.title)).map((t) => ({ icon: 'wrench', title: t.title, sub: t.ref + ' · ' + labName(t.labId) + ' · ' + TK_STATUS[t.status][0], go: 'tk-' + t.id }));
     const usR = isAdmin() ? S.coll('users').filter((u) => has(u.name, u.username, u.dept)).map((u) => ({ icon: 'users', title: u.name, sub: u.username + ' · ' + ROLE[u.role][0] + ' · ' + (u.dept || ''), act: 'editUser', id: u.id })) : [];
     [['المعامل', labsR], ['الطلبات بين الأقسام', reqR], ['الأجهزة', devR], ['الحجوزات القادمة', bkR], ['بلاغات الصيانة', tkR], ['المستخدمون', usR]].forEach((g) => { if (g[1].length) groups.push([g[0], g[1].slice(0, 5)]); });
     return groups;
@@ -1706,19 +1898,20 @@
     },
     newDevice(id) { deviceModal(null, id); },
     editDevice(id) { const d = dev(id); if (d) deviceModal(d); },
-    viewDevice(id) { const d = dev(id); if (d) deviceView(d); },
+    viewDevice(id) { go('dev-' + id); },
+    recordCal(id) { const d = dev(id); if (d) calModal(d); },
     reportDevice(id) { const d = dev(id); if (d) ticketModal({ labId: d.labId, deviceId: d.id }); },
     deleteDevice(id) {
       const d = dev(id); if (!d) return;
-      U.confirmDialog({ title: 'حذف الجهاز', danger: true, confirmText: 'حذف', message: 'حذف ' + d.name + ' (' + d.tag + ') من سجل الأجهزة؟ يبقى سجل الصيانة السابق محفوظًا.', onConfirm() { S.remove('devices', id); S.log(me.id, 'حذف الجهاز ' + d.tag); U.toast('تم حذف الجهاز'); setTimeout(render); } });
+      U.confirmDialog({ title: 'حذف الجهاز', danger: true, confirmText: 'حذف', message: 'حذف ' + d.name + ' (' + d.tag + ') من سجل الأجهزة؟ يبقى سجل الصيانة السابق محفوظًا.', onConfirm() { S.remove('devices', id); S.log(me.id, 'حذف الجهاز ' + d.tag); U.toast('تم حذف الجهاز'); setTimeout(() => route().startsWith('dev-') ? go('devices') : render()); } });
     },
     devicesCal() { Object.assign(st.devices, { status: 'cal', lab: '', type: '', q: '' }); go('devices'); },
     newTicket(id) { ticketModal({ labId: id }); },
-    viewTicket(id) { const t = S.byId('tickets', id); if (t) ticketView(t); },
-    ticketStatus(id) { const [tid, status] = id.split('|'); const t = S.byId('tickets', tid); if (t) setTicketStatus(t, status); },
+    viewTicket(id) { go('tk-' + id); },
+    tkAct(id) { const [tid, action] = id.split('|'); const t = S.byId('tickets', tid); if (t) tkAct(t, action); },
     deleteTicket(id) {
       const t = S.byId('tickets', id); if (!t) return;
-      U.confirmDialog({ title: 'حذف البلاغ ' + t.ref, danger: true, confirmText: 'حذف', message: 'سيتم حذف البلاغ «' + t.title + '» نهائيًا.', onConfirm() { S.remove('tickets', id); U.toast('تم حذف البلاغ'); setTimeout(render); } });
+      U.confirmDialog({ title: 'حذف البلاغ ' + t.ref, danger: true, confirmText: 'حذف', message: 'سيتم حذف البلاغ «' + t.title + '» نهائيًا.', onConfirm() { S.remove('tickets', id); U.toast('تم حذف البلاغ'); setTimeout(() => route().startsWith('tk-') ? go('maintenance') : render()); } });
     },
     newUser() { userModal(); },
     editUser(id) { const u = user(id); if (u) userModal(u); },

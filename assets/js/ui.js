@@ -86,6 +86,7 @@
     el.setAttribute('role', 'status');
     el.innerHTML = icon(type === 'bad' ? 'alert' : 'check') + '<span>' + h(msg) + '</span>';
     root.appendChild(el);
+    while (root.children.length > 3) root.firstElementChild.remove();
     setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; }, 2600);
     setTimeout(() => el.remove(), 3000);
   }

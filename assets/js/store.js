@@ -289,6 +289,28 @@
     }
     d.labs.forEach((l) => { if (!l.dept) { l.dept = LAB_DEPT[l.id] || d.departments[0].name; changed = true; } });
     if (!Array.isArray(d.requests)) { d.requests = seedRequests(d.devices); changed = true; }
+    // سجل لكل جهاز وخطوات لكل بلاغ، يُبنى من البيانات الموجودة
+    const atISO = (ds, hr) => { const [y, m, dd] = String(ds || iso(new Date())).split('-').map(Number); return new Date(y, m - 1, dd, hr || 9, 0).toISOString(); };
+    const addMonths = (ds, n) => { const [y, m, dd] = ds.split('-').map(Number); return iso(new Date(y, m - 1 + n, dd)); };
+    const todayISO = iso(new Date());
+    d.devices.forEach((dv) => {
+      if (Array.isArray(dv.history)) return;
+      const sup = (d.labs.find((l) => l.id === dv.labId) || {}).supervisorId || 'u1';
+      const hst = [{ at: atISO(dv.purchaseDate, 9), userId: 'u1', kind: 'created', to: dv.labId, text: '' }];
+      if (dv.calibrationDue) {
+        const prev = addMonths(dv.calibrationDue, -6);
+        if (prev < todayISO && prev > (dv.purchaseDate || '')) hst.push({ at: atISO(prev, 11), userId: sup, kind: 'calibration', result: 'pass', cert: 'CAL-' + prev.replace(/-/g, '').slice(2) + '-' + dv.tag.slice(-2), next: dv.calibrationDue, text: 'معايرة دورية لدى جهة معتمدة' });
+      }
+      if (dv.status !== 'working') hst.push({ at: atISO(iso(addDays(new Date(), -3)), 10), userId: sup, kind: 'status', from: 'working', to: dv.status, text: dv.notes || '' });
+      dv.history = hst; changed = true;
+    });
+    d.tickets.forEach((t) => {
+      if (Array.isArray(t.log)) return;
+      const L = [{ at: atISO(t.createdAt, 9), userId: t.reporterId, kind: 'status', status: 'open', text: '' }];
+      if (t.status !== 'open') L.push({ at: atISO(t.createdAt, 13), userId: t.assigneeId, kind: 'status', status: 'in_progress', text: '' });
+      if (t.status === 'resolved') { t.resolution = t.resolution || t.description || 'تم الإصلاح وإعادة الجهاز للخدمة.'; L.push({ at: atISO(t.resolvedAt || t.createdAt, 14), userId: t.assigneeId, kind: 'status', status: 'resolved', text: t.resolution }); }
+      t.log = L; changed = true;
+    });
     d.counters = d.counters || {};
     if (!d.counters.req) { d.counters.req = 142; changed = true; }
     return changed;
