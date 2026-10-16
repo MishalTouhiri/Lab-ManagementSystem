@@ -140,6 +140,8 @@
 
   function renderShell(view, active) {
     const notes = notifications();
+    const seen = seenSet();
+    const unseen = notes.filter((n) => !seen.has(n.key)).length;
     const nav = NAV.map((g) => {
       const items = g.items.filter(allowed);
       if (!items.length) return '';
@@ -164,10 +166,11 @@
       '<div style="min-width:0"><div class="crumb">' + h(view.crumb || 'مِختبَر') + '</div><h1>' + h(view.title) + '</h1></div>' +
       '<span class="spacer"></span>' +
       '<button class="btn btn-primary hide-sm" data-act="newBooking">' + icon('plus') + 'حجز جديد</button>' +
+      '<button class="search-trigger" data-act="palette" aria-label="بحث سريع" title="بحث سريع (Ctrl+K)">' + icon('search') + '<span class="hide-sm">ابحث في المنصة…</span><kbd class="hide-sm">Ctrl K</kbd></button>' +
       '<button class="icon-btn" data-act="toggleTheme" title="تبديل المظهر" aria-label="تبديل المظهر">' + icon(isDark() ? 'sun' : 'moon') + '</button>' +
-      '<div class="rel"><button class="icon-btn" data-act="toggleNotif" aria-label="الإشعارات" aria-expanded="false">' + icon('bell') + (notes.length ? '<span class="dot">' + notes.length + '</span>' : '') + '</button>' +
+      '<div class="rel"><button class="icon-btn" data-act="toggleNotif" aria-label="الإشعارات" aria-expanded="false">' + icon('bell') + (unseen ? '<span class="dot">' + unseen + '</span>' : '') + '</button>' +
       '<div class="popover" id="notif-pop" hidden><div class="ph">الإشعارات</div><div class="list">' +
-      (notes.length ? notes.map((n) => '<div class="list-item" data-act="go" data-id="' + n.go + '"><div class="n-ico ' + n.cls + '">' + icon(n.icon) + '</div><div class="grow"><b>' + h(n.title) + '</b><span>' + h(n.sub) + '</span></div></div>').join('') : emptyState('bell', 'لا توجد إشعارات جديدة')) +
+      (notes.length ? notes.map((n) => '<div class="list-item' + (seen.has(n.key) ? '' : ' unseen') + '" data-act="go" data-id="' + n.go + '"><div class="n-ico ' + n.cls + '">' + icon(n.icon) + '</div><div class="grow"><b>' + h(n.title) + '</b><span>' + h(n.sub) + '</span></div></div>').join('') : emptyState('bell', 'لا توجد إشعارات جديدة')) +
       '</div></div></div>' +
       '</header>' +
       '<main class="content" id="view">' + view.html + '</main>' +
@@ -181,23 +184,30 @@
 
   function notifications() {
     const out = [];
-    pendingForMe().slice(0, 5).forEach((b) => out.push({ cls: 'warn', icon: 'calendar', title: 'طلب حجز: ' + b.title, sub: labName(b.labId) + ' · ' + U.fmtDay(b.date) + ' · ' + userName(b.userId), go: 'bookings' }));
+    pendingForMe().slice(0, 5).forEach((b) => out.push({ key: 'bk:' + b.id, cls: 'warn', icon: 'calendar', title: 'طلب حجز: ' + b.title, sub: labName(b.labId) + ' · ' + U.fmtDay(b.date) + ' · ' + userName(b.userId), go: 'bookings' }));
     if (me.role !== 'student') {
       S.coll('requests').filter((r) => (r.status === 'new' && isReceiver(r) && (r.toDept === me.dept || isAdmin())) || (r.status === 'info' && isSender(r))).slice(0, 4)
-        .forEach((r) => out.push({ cls: r.status === 'info' ? 'warn' : 'info', icon: 'swap', title: (r.status === 'info' ? 'مطلوب استكمال: ' : 'طلب وارد من ' + r.fromDept + ': ') + r.title, sub: r.ref + ' · ' + RQ_TYPE[r.type][0], go: 'req-' + r.id }));
+        .forEach((r) => out.push({ key: 'rq:' + r.id + ':' + r.status, cls: r.status === 'info' ? 'warn' : 'info', icon: 'swap', title: (r.status === 'info' ? 'مطلوب استكمال: ' : 'طلب وارد من ' + r.fromDept + ': ') + r.title, sub: r.ref + ' · ' + RQ_TYPE[r.type][0], go: 'req-' + r.id }));
     }
     if (isStaff()) {
       S.coll('devices').filter((d) => managesLab(d.labId)).forEach((d) => {
         const c = calState(d);
-        if (c && c.days <= 7) out.push({ cls: c.days < 0 ? 'bad' : 'warn', icon: 'gauge', title: 'معايرة ' + (c.days < 0 ? 'متأخرة' : 'مستحقة') + ': ' + d.name, sub: d.tag + ' · ' + (c.days < 0 ? 'متأخرة ' + daysTxt(-c.days) : c.days === 0 ? 'اليوم' : 'خلال ' + daysTxt(c.days)), go: 'devices' });
+        if (c && c.days <= 7) out.push({ key: 'cal:' + d.id + ':' + d.calibrationDue + ':' + (c.days < 0), cls: c.days < 0 ? 'bad' : 'warn', icon: 'gauge', title: 'معايرة ' + (c.days < 0 ? 'متأخرة' : 'مستحقة') + ': ' + d.name, sub: d.tag + ' · ' + (c.days < 0 ? 'متأخرة ' + daysTxt(-c.days) : c.days === 0 ? 'اليوم' : 'خلال ' + daysTxt(c.days)), go: 'devices' });
       });
       S.coll('tickets').filter((t) => t.status === 'open' && (t.priority === 'urgent' || t.priority === 'high') && managesLab(t.labId))
-        .forEach((t) => out.push({ cls: 'bad', icon: 'wrench', title: 'بلاغ ' + TK_PRI[t.priority][0] + ': ' + t.title, sub: t.ref + ' · ' + labName(t.labId), go: 'maintenance' }));
+        .forEach((t) => out.push({ key: 'tk:' + t.id, cls: 'bad', icon: 'wrench', title: 'بلاغ ' + TK_PRI[t.priority][0] + ': ' + t.title, sub: t.ref + ' · ' + labName(t.labId), go: 'maintenance' }));
     } else {
       S.coll('bookings').filter((b) => b.userId === me.id && b.date >= today() && (b.status === 'approved' || b.status === 'rejected')).sort(byStart).slice(0, 5)
-        .forEach((b) => out.push({ cls: b.status === 'approved' ? 'info' : 'bad', icon: b.status === 'approved' ? 'check' : 'x', title: (b.status === 'approved' ? 'تم تأكيد حجزك: ' : 'تم رفض طلبك: ') + b.title, sub: labName(b.labId) + ' · ' + U.fmtDay(b.date), go: 'bookings' }));
+        .forEach((b) => out.push({ key: 'my:' + b.id + ':' + b.status, cls: b.status === 'approved' ? 'info' : 'bad', icon: b.status === 'approved' ? 'check' : 'x', title: (b.status === 'approved' ? 'تم تأكيد حجزك: ' : 'تم رفض طلبك: ') + b.title, sub: labName(b.labId) + ' · ' + U.fmtDay(b.date), go: 'bookings' }));
     }
     return out;
+  }
+  /* الإشعارات المقروءة تُحفظ لكل مستخدم حتى لا يبقى العداد مرتفعًا بعد الاطلاع */
+  function seenSet() { try { return new Set(JSON.parse(S.prefs.get('seen.' + me.id, '[]'))); } catch (e) { return new Set(); } }
+  function markSeen(notes) {
+    const seen = seenSet();
+    notes.forEach((n) => seen.add(n.key));
+    S.prefs.set('seen.' + me.id, JSON.stringify([...seen].slice(-300)));
   }
 
   /* ===== شاشة الدخول ===== */
@@ -230,7 +240,6 @@
       if (!found) return renderLogin('اسم المستخدم أو كلمة المرور غير صحيحة.', u);
       if (!found.active) return renderLogin('هذا الحساب موقوف. تواصل مع مدير النظام.', u);
       S.session.set(found.id);
-      S.log(found.id, 'سجّل الدخول إلى النظام');
       if (route() !== 'dashboard') location.hash = 'dashboard'; else render();
     };
     form.addEventListener('submit', (e) => { e.preventDefault(); const d = U.formData(form); tryLogin(d.username, d.password); });
@@ -313,7 +322,7 @@
       side = card('حجوزاتي القادمة', '', mine.length ? '<div class="list">' + mine.map((b) => '<div class="list-item" data-act="viewBooking" data-id="' + b.id + '" style="cursor:pointer"><div class="grow"><b>' + h(b.title) + '</b><span>' + h(labName(b.labId)) + ' · ' + U.fmtDay(b.date) + ' · ' + U.fmtTime(b.start) + '</span></div>' + pill(BK_STATUS, b.status) + '</div>').join('') + '</div>' : emptyState('calendar', 'ليس لديك حجوزات قادمة'), '<button class="btn btn-sm" data-act="newBooking">' + icon('plus') + 'حجز</button>', true);
     }
 
-    const acts = S.coll('activity').slice(0, 6);
+    const acts = S.coll('activity').filter((a) => !/^سجّل (الدخول|الخروج)/.test(a.text)).slice(0, 6);
     const actCard = card('آخر النشاطات', '', acts.length ? '<div class="timeline">' + acts.map((a) => '<div class="ev"><div class="avatar">' + h(U.initials(userName(a.userId))) + '</div><div><p><b>' + h(userName(a.userId)) + '</b> ' + h(a.text) + '</p><time>' + U.timeAgo(a.at) + '</time></div></div>').join('') + '</div>' : emptyState('clock', 'لا توجد نشاطات بعد'), '', true);
 
     return {
@@ -1358,6 +1367,7 @@
     else if (r.status === 'info') note = isSender(r) ? 'القسم المستلم طلب معلومات إضافية منك' : 'بانتظار استكمال ' + r.fromDept;
     else if (isReceiver(r) && b) note = 'القرار عند قسم ' + r.toDept;
     else note = 'بانتظار إجراء قسم ' + r.toDept;
+    if (canPrint) b += '<button class="btn btn-ghost" data-act="printReq" data-id="' + r.id + '" title="طباعة نموذج الطلب">' + icon('doc') + 'طباعة</button>';
     const actions = '<div class="rq-actions"><span class="note">' + icon('info') + h(note) + '</span>' + b + '</div>';
 
     // تنبيه أعلى التفاصيل
@@ -1542,6 +1552,85 @@
     });
   }
 
+  /* ===== البحث السريع ===== */
+  function paletteResults(q) {
+    q = q.trim().toLowerCase();
+    const groups = [];
+    const has = (...xs) => xs.join(' ').toLowerCase().includes(q);
+    const pages = NAV.flatMap((g) => g.items).filter(allowed).filter((i) => !q || has(i.label)).map((i) => ({ icon: i.icon, title: i.label, sub: 'صفحة', go: i.id }));
+    if (pages.length) groups.push(['الصفحات', pages.slice(0, q ? 4 : 10)]);
+    if (!q) return groups;
+    const labsR = S.coll('labs').filter((l) => has(l.name, l.code, l.building, l.room)).map((l) => ({ icon: 'flask', title: l.name, sub: l.code + ' · ' + l.building + ' · ' + LAB_STATUS[l.status][0], go: 'lab-' + l.id }));
+    const devR = S.coll('devices').filter((d) => has(d.tag, d.name, d.model, d.serial)).map((d) => ({ icon: 'cpu', title: d.name + ' · ' + d.tag, sub: labName(d.labId) + ' · ' + DEV_STATUS[d.status][0], act: 'viewDevice', id: d.id }));
+    const reqR = me.role === 'student' ? [] : S.coll('requests').filter(rqVisible).filter((r) => has(r.ref, r.title, r.fromDept, r.toDept)).map((r) => ({ icon: RQ_TYPE[r.type][1], title: r.title, sub: r.ref + ' · ' + r.fromDept + ' ← ' + r.toDept + ' · ' + RQ_STATUS[r.status][0], go: 'req-' + r.id }));
+    const bkR = S.coll('bookings').filter((b) => (isAdmin() || b.userId === me.id || managesLab(b.labId) || b.status === 'approved') && b.date >= today() && has(b.title)).sort(byStart).map((b) => ({ icon: 'calendar', title: b.title, sub: labName(b.labId) + ' · ' + U.fmtDay(b.date) + ' · ' + U.fmtTime(b.start), act: 'viewBooking', id: b.id }));
+    const tkR = S.coll('tickets').filter((t) => (isStaff() || t.reporterId === me.id) && has(t.ref, t.title)).map((t) => ({ icon: 'wrench', title: t.title, sub: t.ref + ' · ' + labName(t.labId) + ' · ' + TK_STATUS[t.status][0], act: 'viewTicket', id: t.id }));
+    const usR = isAdmin() ? S.coll('users').filter((u) => has(u.name, u.username, u.dept)).map((u) => ({ icon: 'users', title: u.name, sub: u.username + ' · ' + ROLE[u.role][0] + ' · ' + (u.dept || ''), act: 'editUser', id: u.id })) : [];
+    [['المعامل', labsR], ['الطلبات بين الأقسام', reqR], ['الأجهزة', devR], ['الحجوزات القادمة', bkR], ['بلاغات الصيانة', tkR], ['المستخدمون', usR]].forEach((g) => { if (g[1].length) groups.push([g[0], g[1].slice(0, 5)]); });
+    return groups;
+  }
+  function openPalette() {
+    U.closeModal();
+    const root = document.getElementById('modal-root');
+    root.innerHTML = '<div class="modal-backdrop palette-back" data-pclose><div class="palette" role="dialog" aria-modal="true" aria-label="بحث سريع">' +
+      '<div class="palette-in">' + icon('search') + '<input id="pal-q" type="search" placeholder="ابحث عن معمل، جهاز برقم الأصل، طلب برقمه، حجز…" autocomplete="off" aria-controls="pal-list"><kbd>Esc</kbd></div>' +
+      '<div class="palette-list" id="pal-list" role="listbox"></div><div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> للتنقل</span><span><kbd>Enter</kbd> للفتح</span></div></div></div>';
+    const back = root.firstElementChild, input = root.querySelector('#pal-q'), list = root.querySelector('#pal-list');
+    let flat = [], active = 0;
+    const draw = () => {
+      const groups = paletteResults(input.value);
+      flat = groups.flatMap((g) => g[1]);
+      active = Math.min(active, Math.max(flat.length - 1, 0));
+      let i = 0;
+      list.innerHTML = flat.length ? groups.map((g) => '<div class="pal-group">' + h(g[0]) + '</div>' + g[1].map((it) => { const idx = i++; return '<div class="pal-item' + (idx === active ? ' on' : '') + '" role="option" data-i="' + idx + '" aria-selected="' + (idx === active) + '"><div class="n-ico info">' + icon(it.icon) + '</div><div class="grow"><b>' + h(it.title) + '</b><span>' + h(it.sub) + '</span></div></div>'; }).join('')).join('')
+        : emptyState('search', 'لا توجد نتائج لـ «' + input.value + '»');
+    };
+    const choose = (idx) => {
+      const it = flat[idx]; if (!it) return;
+      U.closeModal();
+      if (it.go) go(it.go); else if (ACTIONS[it.act]) ACTIONS[it.act](it.id);
+    };
+    input.addEventListener('input', () => { active = 0; draw(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, flat.length - 1); draw(); list.querySelector('.on')?.scrollIntoView({ block: 'nearest' }); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); draw(); list.querySelector('.on')?.scrollIntoView({ block: 'nearest' }); }
+      else if (e.key === 'Enter') { e.preventDefault(); choose(active); }
+      else if (e.key === 'Escape') { U.closeModal(); }
+    });
+    list.addEventListener('click', (e) => { const el = e.target.closest('[data-i]'); if (el) choose(+el.dataset.i); });
+    back.addEventListener('mousedown', (e) => { if (e.target === back) U.closeModal(); });
+    draw();
+    input.focus();
+  }
+
+  /* ===== طباعة نموذج الطلب (تعمل عند فتح المنصة على الجهاز) ===== */
+  const canPrint = (() => { try { return window.self === window.top; } catch (e) { return false; } })();
+  function printRequest(r) {
+    const t = RQ_TYPE[r.type] || RQ_TYPE.other;
+    const fromD = deptOf(r.fromDept) || {}, toD = deptOf(r.toDept) || {};
+    const d = dev(r.deviceId);
+    const row = (k, v) => '<tr><th>' + h(k) + '</th><td>' + v + '</td></tr>';
+    let rows = row('رقم الطلب', '<b class="ltr">' + h(r.ref) + '</b>') + row('نوع الطلب', h(t[0])) + row('الحالة', h(RQ_STATUS[r.status][0])) + row('الأولوية', h(TK_PRI[r.priority][0])) +
+      row('من قسم', h(r.fromDept) + (fromD.ext ? ' · تحويلة ' + h(fromD.ext) : '')) + row('إلى قسم', h(r.toDept) + (toD.ext ? ' · تحويلة ' + h(toD.ext) : '')) +
+      row('مقدم الطلب', h(userName(r.requesterId))) + row('تاريخ الطلب', U.fmtDate(r.createdAt)) + row('مطلوب قبل', U.fmtDate(r.dueDate));
+    if (r.type === 'loan') rows += row('الجهاز', d ? h(d.tag + ' · ' + d.name) : '—') + row('الكمية', h(r.qty || 1)) + row('فترة الإعارة', U.fmtDate(r.loanFrom) + ' إلى ' + U.fmtDate(r.loanTo));
+    if (r.type === 'lab') rows += row('المعمل', h(labName(r.labId))) + row('الموعد', U.fmtDay(r.date) + ' · ' + U.fmtTime(r.start) + ' – ' + U.fmtTime(r.end)) + row('عدد الحضور', h(r.attendees));
+    if (r.type === 'transfer') rows += row('الجهاز', d ? h(d.tag + ' · ' + d.name) : '—') + row('إلى معمل', h(labName(r.targetLabId)));
+    if (r.type === 'support' && d) rows += row('الجهاز المعني', h(d.tag + ' · ' + d.name));
+    const items = r.items && r.items.length ? '<h3>البنود المطلوبة</h3><table class="pf-tbl"><thead><tr><th>#</th><th>البند</th><th>الكمية</th><th>الوحدة</th></tr></thead><tbody>' + r.items.map((it, i) => '<tr><td>' + (i + 1) + '</td><td>' + h(it.name) + '</td><td>' + h(it.qty) + '</td><td>' + h(it.unit || '') + '</td></tr>').join('') + '</tbody></table>' : '';
+    const hist = '<h3>سجل الإجراءات</h3><table class="pf-tbl"><thead><tr><th>التاريخ</th><th>بواسطة</th><th>الإجراء</th><th>ملاحظة</th></tr></thead><tbody>' +
+      r.log.map((e) => '<tr><td>' + fmtStamp(e.at) + '</td><td>' + h(userName(e.userId)) + '</td><td>' + h(e.kind === 'comment' ? 'رد' : RQ_STATUS[e.status][0]) + '</td><td>' + h(e.text || '') + '</td></tr>').join('') + '</tbody></table>';
+    const sig = (title, name) => '<div class="pf-sig"><b>' + h(title) + '</b><span>الاسم: ' + h(name || '') + '</span><span>التوقيع:</span><span>التاريخ:</span></div>';
+    let pr = document.getElementById('print-root');
+    if (!pr) { pr = document.createElement('div'); pr.id = 'print-root'; document.body.appendChild(pr); }
+    pr.innerHTML = '<div class="pf"><header><div><b>مِختبَر · نظام إدارة المعامل</b><span>نموذج طلب بين الأقسام</span></div><div class="pf-ref ltr">' + h(r.ref) + '</div></header>' +
+      '<h2>' + h(r.title) + '</h2><table class="pf-kv">' + rows + '</table>' + items +
+      (r.description ? '<h3>الوصف والمبررات</h3><p>' + h(r.description) + '</p>' : '') + hist +
+      '<div class="pf-sigs">' + sig('مقدم الطلب', userName(r.requesterId)) + sig('رئيس القسم المرسل', userName(fromD.managerId)) + sig('رئيس القسم المستلم', userName(toD.managerId)) + '</div>' +
+      '<footer>طُبع من منصة مِختبَر بتاريخ ' + U.fmtDate(today()) + '</footer></div>';
+    window.print();
+  }
+
   /* ===== أدوات الفلترة ===== */
   function bindFilters(root, map, draw) {
     Object.keys(map).forEach((sel) => {
@@ -1576,11 +1665,14 @@
   const VIEWS = { requests: () => viewRequests(''), dashboard: viewDashboard, labs: viewLabs, devices: viewDevices, schedule: viewSchedule, bookings: viewBookings, maintenance: viewMaintenance, reports: viewReports, users: viewUsers, settings: viewSettings };
   const withB = (fn) => (id) => { const b = S.byId('bookings', id); if (b) fn(b); };
   const ACTIONS = {
-    logout() { S.log(me.id, 'سجّل الخروج'); S.session.clear(); me = null; location.hash = ''; render(); },
+    logout() { S.session.clear(); me = null; location.hash = ''; render(); },
     openNav() { document.getElementById('shell').classList.add('nav-open'); },
     closeNav() { document.getElementById('shell').classList.remove('nav-open'); },
     toggleTheme() { S.prefs.set('theme', isDark() ? 'light' : 'dark'); render(); },
-    toggleNotif(id, el) { const p = document.getElementById('notif-pop'); p.hidden = !p.hidden; el.setAttribute('aria-expanded', String(!p.hidden)); },
+    toggleNotif(id, el) {
+      const p = document.getElementById('notif-pop'); p.hidden = !p.hidden; el.setAttribute('aria-expanded', String(!p.hidden));
+      if (!p.hidden) { markSeen(notifications()); const dot = el.querySelector('.dot'); if (dot) dot.remove(); }
+    },
     go(id) { go(id); },
     newBooking() { bookingModal(); },
     bookLab(id) { bookingModal({ labId: id }); },
@@ -1632,6 +1724,9 @@
     editUser(id) { const u = user(id); if (u) userModal(u); },
     deleteUser(id) {
       const u = user(id); if (!u || u.id === me.id) return;
+      const sup = S.coll('labs').filter((l) => l.supervisorId === id).map((l) => l.name);
+      const mgr = S.coll('departments').filter((d) => d.managerId === id).map((d) => 'قسم ' + d.name);
+      if (sup.length || mgr.length) { U.toast('لا يمكن حذف ' + u.name + ': مسؤول عن ' + sup.concat(mgr).join('، ') + '. عيّن بديلًا أولًا أو أوقف الحساب.', 'bad'); return; }
       U.confirmDialog({ title: 'حذف المستخدم', danger: true, confirmText: 'حذف', message: 'حذف حساب ' + u.name + '؟ تبقى حجوزاته وبلاغاته السابقة في السجل. يمكنك بدلًا من ذلك إيقاف الحساب.', onConfirm() { S.remove('users', id); S.log(me.id, 'حذف حساب ' + u.name); U.toast('تم حذف المستخدم'); setTimeout(render); } });
     },
     newDept() { deptModal(); },
@@ -1641,6 +1736,8 @@
       U.confirmDialog({ title: 'حذف القسم', danger: true, confirmText: 'حذف', message: 'حذف قسم ' + d.name + '؟ تبقى الطلبات السابقة المرتبطة به في السجل.', onConfirm() { S.remove('departments', id); U.toast('تم حذف القسم'); setTimeout(render); } });
     },
     newRequest() { requestModal(); },
+    palette() { openPalette(); },
+    printReq(id) { const r = S.byId('requests', id); if (r) printRequest(r); },
     reqAct(id) { const [rid, action] = id.split('|'); const r = S.byId('requests', rid); if (r) rqAct(r, action); },
     schedLab(id) { st.schedule.lab = id; st.schedule.week = 0; go('schedule'); },
     exportBookings, exportDevices, exportTickets,
@@ -1667,6 +1764,12 @@
     if (a) { const sh = document.getElementById('shell'); if (sh) sh.classList.remove('nav-open'); }
   });
   window.addEventListener('hashchange', render);
+  document.addEventListener('keydown', (e) => {
+    if (!me) return;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target || {}).tagName || '');
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K' || e.code === 'KeyK')) { e.preventDefault(); openPalette(); }
+    else if (e.key === '/' && !typing && !document.querySelector('.modal-backdrop')) { e.preventDefault(); openPalette(); }
+  });
   if (window.matchMedia) {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     const onChange = () => { if (S.prefs.get('theme', 'system') === 'system' && me) render(); };
