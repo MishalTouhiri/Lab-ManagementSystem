@@ -7,10 +7,10 @@
   const { iso, addDays, weekStart, pad } = S.util;
 
   /* ===== القواميس ===== */
-  const ROLE = { admin: ['مدير النظام', 'accent'], supervisor: ['مشرف معمل', 'info'], faculty: ['عضو هيئة تدريس', 'warn'], student: ['طالب', ''] };
+  const ROLE = { admin: ['مدير النظام', 'accent'], supervisor: ['مشرف معمل', 'info'], it: ['الدعم الفني', 'ok'], committee: ['عضو لجنة المعامل', 'warn'], faculty: ['عضو هيئة تدريس', ''], student: ['طالب', ''] };
   const LAB_TYPE = { computer: 'حاسب آلي', network: 'شبكات', physics: 'فيزياء', chemistry: 'كيمياء', electronics: 'إلكترونيات' };
   const LAB_STATUS = { active: ['متاح', 'ok'], maintenance: ['تحت الصيانة', 'warn'], closed: ['مغلق', 'bad'] };
-  const DEV_TYPE = { computer: 'حاسب آلي', display: 'أجهزة عرض', network: 'معدات شبكات', instrument: 'جهاز قياس', electronics: 'إلكترونيات', server: 'خادم', other: 'أخرى' };
+  const DEV_TYPE = new Proxy({}, { get: (o, k) => (S.byId('deviceTypes', k) || {}).name || k, ownKeys: () => S.coll('deviceTypes').map((t) => t.id), getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }) });
   const DEV_STATUS = { working: ['يعمل', 'ok'], maintenance: ['في الصيانة', 'warn'], broken: ['معطّل', 'bad'], retired: ['خارج الخدمة', ''] };
   const BK_STATUS = { approved: ['مؤكد', 'ok'], pending: ['بانتظار الموافقة', 'warn'], rejected: ['مرفوض', 'bad'], cancelled: ['ملغى', ''] };
   const TK_PRI = { low: ['منخفضة', ''], medium: ['متوسطة', 'info'], high: ['عالية', 'warn'], urgent: ['عاجلة', 'bad'] };
@@ -20,14 +20,14 @@
   let me = null;
   const st = {
     labs: { q: '', type: '', status: '' },
-    devices: { q: '', lab: '', status: '', type: '' },
+    devices: { q: '', lab: '', status: '', type: '', campus: '' },
     bookings: { tab: '', q: '' },
-    tickets: { tab: 'active', q: '' },
+    tickets: { tab: 'active', q: '', campus: '', type: '', sem: '' },
     schedule: { lab: '', week: 0 },
     reports: { period: 'month' },
     users: { q: '', role: '' },
     req: { box: '', group: 'all', type: '', dept: '', q: '', scroll: 0 },
-    labTab: 'devices'
+    labTab: 'stations'
   };
 
   /* ===== أدوات مساعدة ===== */
@@ -72,7 +72,7 @@
     return '<span class="pill ' + c.cls + '">' + h(txt) + '</span>';
   }
   const pendingForMe = () => isStaff() ? S.coll('bookings').filter((b) => b.status === 'pending' && b.date >= today() && canApprove(b)).sort(byStart) : [];
-  const openTicketsForMe = () => S.coll('tickets').filter((t) => t.status !== 'resolved' && (isStaff() ? managesLab(t.labId) : t.reporterId === me.id));
+  const openTicketsForMe = () => S.coll('tickets').filter((t) => t.status !== 'resolved' && (isStaff() ? managesLab(t.labId) : me.role === 'it' ? !!t.forwardedIT : me.role === 'committee' ? false : t.reporterId === me.id));
   const meterCls = (p) => p >= 85 ? 'bad' : p >= 65 ? 'warn' : '';
   const emptyState = (ic, msg) => '<div class="empty">' + icon(ic) + '<span>' + h(msg) + '</span></div>';
   const labElem = (l, size) => '<div class="elem t-' + l.type + '"' + (size ? ' style="width:' + size + 'px;height:' + size + 'px"' : '') + '><i>' + h(l.room) + '</i><b>' + h(l.code.split('-')[0]) + '</b><small>' + h(l.code.split('-')[1] || '') + '</small></div>';
@@ -93,19 +93,26 @@
   const NAV = [
     { group: 'الرئيسية', items: [{ id: 'dashboard', label: 'لوحة التحكم', icon: 'dashboard' }] },
     {
-      group: 'التشغيل', items: [
-        { id: 'labs', label: 'المعامل', icon: 'flask' },
+      group: 'المعامل والمعدات', items: [
+        { id: 'campuses', label: 'الحرم الجامعي', icon: 'map' },
+        { id: 'labs', label: 'المعامل والمحطات', icon: 'flask' },
         { id: 'devices', label: 'الأجهزة والمعدات', icon: 'cpu' },
         { id: 'schedule', label: 'الجدول الأسبوعي', icon: 'grid' },
-        { id: 'bookings', label: 'الحجوزات', icon: 'calendar', count: () => pendingForMe().length },
-        { id: 'maintenance', label: 'الصيانة والأعطال', icon: 'wrench', count: () => openTicketsForMe().length },
-        { id: 'requests', label: 'طلبات الأقسام', icon: 'swap', roles: ['admin', 'supervisor', 'faculty'], count: () => rqInboxCount() }
+        { id: 'bookings', label: 'الحجوزات', icon: 'calendar', count: () => pendingForMe().length }
       ]
     },
     {
-      group: 'الإدارة', items: [
-        { id: 'reports', label: 'التقارير', icon: 'chart', roles: ['admin', 'supervisor'] },
-        { id: 'users', label: 'المستخدمون', icon: 'users', roles: ['admin'] },
+      group: 'البلاغات والطلبات', items: [
+        { id: 'maintenance', label: 'البلاغات والأعطال', icon: 'wrench', count: () => openTicketsForMe().length },
+        { id: 'approvals', label: 'موافقات اللجنة', icon: 'flag', roles: ['admin', 'committee'], count: () => S.coll('tickets').filter(approvalPending).length },
+        { id: 'requests', label: 'طلبات الأقسام', icon: 'swap', roles: ['admin', 'supervisor', 'faculty', 'it', 'committee'], count: () => rqInboxCount() }
+      ]
+    },
+    {
+      group: 'التقارير والإعدادات', items: [
+        { id: 'reports', label: 'التقارير', icon: 'chart', roles: ['admin', 'supervisor', 'committee'] },
+        { id: 'users', label: 'المستخدمون والأقسام', icon: 'users', roles: ['admin'] },
+        { id: 'reference', label: 'البيانات المرجعية', icon: 'box', roles: ['admin'] },
         { id: 'settings', label: 'الإعدادات', icon: 'settings' }
       ]
     }
@@ -122,7 +129,7 @@
     const sid = S.session.get();
     me = sid ? user(sid) : null;
     if (me && !me.active) { S.session.clear(); me = null; }
-    if (!me) return renderLogin();
+    if (!me) { const r0 = route(); if (r0 === 'report' || r0 === 'track') return renderPublic(r0); return renderLogin(); }
 
     const r = route();
     let view;
@@ -191,7 +198,10 @@
       S.coll('requests').filter((r) => (r.status === 'new' && isReceiver(r) && (r.toDept === me.dept || isAdmin())) || (r.status === 'info' && isSender(r))).slice(0, 4)
         .forEach((r) => out.push({ key: 'rq:' + r.id + ':' + r.status, cls: r.status === 'info' ? 'warn' : 'info', icon: 'swap', title: (r.status === 'info' ? 'مطلوب استكمال: ' : 'طلب وارد من ' + r.fromDept + ': ') + r.title, sub: r.ref + ' · ' + RQ_TYPE[r.type][0], go: 'req-' + r.id }));
     }
+    if (me.role === 'it') S.coll('tickets').filter((t) => t.forwardedIT && t.status !== 'resolved').forEach((t) => out.push({ key: 'fw:' + t.id, cls: 'info', icon: 'send', title: 'بلاغ محوّل إليك: ' + t.title, sub: t.ref + ' · ' + labName(t.labId), go: 'tk-' + t.id }));
+    if (canDecide()) S.coll('tickets').filter(approvalPending).forEach((t) => out.push({ key: 'ap:' + t.id, cls: 'warn', icon: 'flag', title: 'طلب موافقة: ' + APPROVAL_KIND[t.approval.kind], sub: t.ref + ' · ' + (t.approval.cost ? fmtSAR(t.approval.cost) : 'بدون تكلفة'), go: 'tk-' + t.id }));
     if (isStaff()) {
+      S.coll('tickets').filter((t) => t.guest && t.status === 'open' && managesLab(t.labId)).forEach((t) => out.push({ key: 'gs:' + t.id, cls: 'info', icon: 'wrench', title: 'بلاغ من زائر: ' + t.title, sub: t.ref + ' · ' + labName(t.labId), go: 'tk-' + t.id }));
       S.coll('devices').filter((d) => managesLab(d.labId)).forEach((d) => {
         const c = calState(d);
         if (c && c.days <= 7) out.push({ key: 'cal:' + d.id + ':' + d.calibrationDue + ':' + (c.days < 0), cls: c.days < 0 ? 'bad' : 'warn', icon: 'gauge', title: 'معايرة ' + (c.days < 0 ? 'متأخرة' : 'مستحقة') + ': ' + d.name, sub: d.tag + ' · ' + (c.days < 0 ? 'متأخرة ' + daysTxt(-c.days) : c.days === 0 ? 'اليوم' : 'خلال ' + daysTxt(c.days)), go: 'dev-' + d.id });
@@ -214,14 +224,14 @@
 
   /* ===== شاشة الدخول ===== */
   function renderLogin(err, username) {
-    const demo = [['admin', 'admin123', 'مدير النظام'], ['supervisor', 'super123', 'مشرف معمل'], ['faculty', 'faculty123', 'عضو هيئة تدريس'], ['student', 'student123', 'طالب']];
+    const demo = [['admin', 'admin123', 'مدير النظام'], ['supervisor', 'super123', 'مشرف معمل'], ['it', 'it123', 'الدعم الفني'], ['committee', 'committee123', 'لجنة المعامل'], ['faculty', 'faculty123', 'عضو هيئة تدريس'], ['student', 'student123', 'طالب']];
     const cells = S.coll('labs').slice(0, 6).map((l, i) => '<div class="cell' + (i % 2 === 0 ? ' on' : '') + '"><i>' + h(l.room) + '</i><b>' + h(l.code.split('-')[0]) + '</b><small>' + h(l.code.split('-')[1] || '') + '</small></div>').join('');
     const ghosts = ['Cu', 'Si', 'Ge', 'Na', 'Fe', 'Ag'].map((s, i) => '<div class="cell ghost"><i>' + [29, 14, 32, 11, 26, 47][i] + '</i><b>' + s + '</b></div>').join('');
     document.getElementById('app').innerHTML =
       '<div class="login">' +
       '<section class="login-art">' +
       '<div class="brand"><div class="brand-mark"><small>LM</small>Lb</div><div><div class="brand-name">مِختبَر</div><div class="brand-sub">نظام إدارة المعامل</div></div></div>' +
-      '<div><h2>كل معامل الكلية في لوحة واحدة.</h2><p class="lead">حجز المعامل بلا تعارض، متابعة الأجهزة ومواعيد معايرتها، وبلاغات صيانة تصل للمشرف المسؤول مباشرة.</p></div>' +
+      '<div><h2>كل معامل الكلية في لوحة واحدة.</h2><p class="lead">من الحرم إلى المعمل إلى المحطة إلى الجهاز: حجز بلا تعارض، تتبع كامل لكل جهاز ومعايرته، وبلاغات أعطال تمر على مشرف المعمل ثم الدعم الفني ثم لجنة المعامل.</p></div>' +
       '<div class="ptable" aria-hidden="true">' + cells + ghosts + '</div>' +
       '<div class="foot">الإصدار 1.0 · تعمل البيانات محليًا على هذا الجهاز</div>' +
       '</section>' +
@@ -234,6 +244,7 @@
       '<div class="demo"><div class="demo-title">حسابات تجريبية للعرض — اضغط للدخول مباشرة</div><div class="demo-btns">' +
       demo.map((d) => '<button type="button" data-u="' + d[0] + '" data-p="' + d[1] + '"><b>' + h(d[2]) + '</b><span>' + d[0] + ' / ' + d[1] + '</span></button>').join('') +
       '</div></div>' +
+      '<div class="guest-links"><a class="btn" href="#report">' + icon('wrench') + 'الإبلاغ عن عطل بدون حساب</a><a class="btn" href="#track">' + icon('search') + 'تتبع بلاغ</a></div>' +
       '</form></section></div>';
     const form = document.getElementById('login-form');
     const tryLogin = (u, p) => {
@@ -276,6 +287,14 @@
       const late = calDue.filter((d) => calState(d).days < 0).length;
       alerts += '<div class="alert' + (late ? ' bad' : '') + '">' + icon('gauge') + '<div class="grow"><b>' + countTxt(calDue.length, 'جهاز واحد يحتاج', 'جهازان يحتاجان', 'أجهزة تحتاج', 'جهازًا يحتاج') + ' إلى معايرة خلال 7 أيام' + (late ? '، منها ' + late + ' متأخرة' : '') + '.</b> ' +
         h(calDue.map((d) => d.tag).join('، ')) + '</div><button class="btn btn-sm" data-act="devicesCal">عرض الأجهزة</button></div>';
+    }
+    if (me.role === 'it') {
+      const fw = S.coll('tickets').filter((t) => t.forwardedIT && t.status !== 'resolved');
+      if (fw.length) alerts += '<div class="alert info">' + icon('send') + '<div class="grow"><b>' + countTxt(fw.length, 'بلاغ واحد محوّل', 'بلاغان محوّلان', 'بلاغات محوّلة', 'بلاغًا محوّلًا') + ' إلى الدعم الفني.</b> ' + h(fw.map((t) => t.ref).join('، ')) + '</div><a class="btn btn-sm" href="#maintenance" data-act="tkTab" data-id="it">عرض البلاغات</a></div>';
+    }
+    if (canDecide()) {
+      const ap = S.coll('tickets').filter(approvalPending);
+      if (ap.length) alerts += '<div class="alert">' + icon('flag') + '<div class="grow"><b>' + countTxt(ap.length, 'طلب موافقة واحد', 'طلبا موافقة', 'طلبات موافقة', 'طلب موافقة') + ' بانتظار لجنة المعامل</b> بقيمة ' + fmtSAR(ap.reduce((s0, t) => s0 + (t.approval.cost || 0), 0)) + '.</div><a class="btn btn-sm" href="#approvals">مراجعة الطلبات</a></div>';
     }
     if (me.role !== 'student') {
       const rq = S.coll('requests').filter((r) => rqVisible(r) && rqNeedsMe(r) && (r.toDept === me.dept || r.fromDept === me.dept || r.requesterId === me.id));
@@ -325,7 +344,7 @@
     }
 
     const acts = S.coll('activity').filter((a) => !/^سجّل (الدخول|الخروج)/.test(a.text)).slice(0, 6);
-    const actCard = card('آخر النشاطات', '', acts.length ? '<div class="timeline">' + acts.map((a) => '<div class="ev"><div class="avatar">' + h(U.initials(userName(a.userId))) + '</div><div><p><b>' + h(userName(a.userId)) + '</b> ' + h(a.text) + '</p><time>' + U.timeAgo(a.at) + '</time></div></div>').join('') + '</div>' : emptyState('clock', 'لا توجد نشاطات بعد'), '', true);
+    const actCard = card('آخر النشاطات', '', acts.length ? '<div class="timeline">' + acts.map((a) => '<div class="ev"><div class="avatar">' + h(U.initials(a.userId ? userName(a.userId) : 'زائر')) + '</div><div><p><b>' + h(a.userId ? userName(a.userId) : 'زائر') + '</b> ' + h(a.text) + '</p><time>' + U.timeAgo(a.at) + '</time></div></div>').join('') + '</div>' : emptyState('clock', 'لا توجد نشاطات بعد'), '', true);
 
     return {
       title: 'لوحة التحكم', crumb: (hr < 12 ? 'صباح الخير' : 'مساء الخير') + '، ' + firstName(me),
@@ -367,7 +386,7 @@
             const p = labUtil(l, week);
             const tix = S.coll('tickets').filter((t) => t.labId === l.id && t.status !== 'resolved').length;
             return '<article class="card lab-card"><div class="top">' + labElem(l) +
-              '<div style="min-width:0"><h3>' + h(l.name) + '</h3><div class="loc">' + h(l.building) + ' · قاعة ' + h(l.room) + ' · ' + h(LAB_TYPE[l.type]) + '</div></div>' + pill(LAB_STATUS, l.status) + '</div>' +
+              '<div style="min-width:0"><h3>' + h(l.name) + '</h3><div class="loc">' + h(campusName(l.campusId)) + ' · ' + h(l.building) + ' · قاعة ' + h(l.room) + '</div></div>' + pill(LAB_STATUS, l.status) + '</div>' +
               '<p class="desc">' + h(l.description) + '</p>' +
               '<div class="stats"><div><b>' + l.capacity + '</b><span>مقعدًا</span></div><div><b>' + ok + '/' + devs.length + '</b><span>أجهزة تعمل</span></div><div><b>' + tix + '</b><span>بلاغات مفتوحة</span></div></div>' +
               '<div class="occ"><div style="display:flex;justify-content:space-between" class="small"><span class="muted">إشغال الأسبوع</span><b class="num">' + p + '%</b></div><div class="meter ' + meterCls(p) + '"><span style="width:' + p + '%"></span></div></div>' +
@@ -402,7 +421,7 @@
       '</div></div>' +
       '<div class="card-body" style="border-top:1px solid var(--line)"><dl class="dl">' +
       '<dt>رمز المعمل</dt><dd><span class="tag">' + h(l.code) + '</span></dd>' +
-      '<dt>الموقع</dt><dd>' + h(l.building) + ' · قاعة ' + h(l.room) + '</dd>' +
+      '<dt>الموقع</dt><dd>' + h(campusName(l.campusId)) + ' · ' + h(l.building) + ' · قاعة ' + h(l.room) + '</dd>' +
       '<dt>النوع</dt><dd>' + h(LAB_TYPE[l.type]) + '</dd>' +
       '<dt>القسم</dt><dd>' + h(l.dept || '—') + '</dd>' +
       '<dt>السعة</dt><dd>' + l.capacity + ' مقعدًا</dd>' +
@@ -412,7 +431,7 @@
       '</dl></div></section>';
 
     const lev = labEvents(id);
-    const tabs = [['devices', 'الأجهزة', devs.length], ['log', 'سجل الأحداث', lev.length], ['bookings', 'حجوزات هذا الأسبوع', wk.length], ['tickets', 'بلاغات الصيانة', tix.length]];
+    const tabs = [['stations', 'المحطات', S.coll('stations').filter((x) => x.labId === id).length], ['devices', 'الأجهزة', devs.length], ['log', 'سجل الأحداث', lev.length], ['bookings', 'حجوزات هذا الأسبوع', wk.length], ['tickets', 'بلاغات الصيانة', tix.length]];
     const html = info + '<section class="card"><div class="tabs" role="tablist">' + tabs.map((t) => '<button role="tab" data-tab="' + t[0] + '" class="' + (st.labTab === t[0] ? 'on' : '') + '">' + t[1] + '<span class="count">' + t[2] + '</span></button>').join('') + '</div><div id="lab-tab"></div></section>';
 
     return {
@@ -421,7 +440,8 @@
         const box = root.querySelector('#lab-tab');
         const draw = () => {
           root.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === st.labTab));
-          if (st.labTab === 'devices') box.innerHTML = devicesTable(devs, true) + (managesLab(l.id) ? '<div style="padding:14px 20px;border-top:1px solid var(--line)"><button class="btn btn-sm" data-act="newDevice" data-id="' + l.id + '">' + icon('plus') + 'إضافة جهاز لهذا المعمل</button></div>' : '');
+          if (st.labTab === 'stations') box.innerHTML = '<div class="card-body">' + stationsMap(l) + '</div>';
+          else if (st.labTab === 'devices') box.innerHTML = devicesTable(devs, true) + (managesLab(l.id) ? '<div style="padding:14px 20px;border-top:1px solid var(--line)"><button class="btn btn-sm" data-act="newDevice" data-id="' + l.id + '">' + icon('plus') + 'إضافة جهاز لهذا المعمل</button></div>' : '');
           else if (st.labTab === 'bookings') box.innerHTML = bookingsTable(wk, true);
           else if (st.labTab === 'log') box.innerHTML = timeline(lev, true, 'لا توجد أحداث مسجلة لهذا المعمل');
           else box.innerHTML = ticketsTable(tix, true);
@@ -434,7 +454,7 @@
 
   function labModal(existing) {
     const sups = S.coll('users').filter((u) => (u.role === 'supervisor' || u.role === 'admin') && u.active).map((u) => ({ value: u.id, label: u.name }));
-    const v = existing || { type: 'computer', status: 'active', capacity: 24, open: '08:00', close: '18:00', supervisorId: me.role === 'supervisor' ? me.id : '' };
+    const v = existing || { type: 'computer', status: 'active', capacity: 24, open: '08:00', close: '18:00', campusId: (S.coll('campuses')[0] || {}).id, supervisorId: me.role === 'supervisor' ? me.id : '' };
     const fields = [
       { name: 'name', label: 'اسم المعمل', required: true, placeholder: 'مثال: معمل الحاسب الآلي 2' },
       { name: 'code', label: 'رمز المعمل', required: true, ltr: true, placeholder: 'CS-102', hint: 'حروف إنجليزية وأرقام، يظهر على باب المعمل' },
@@ -446,7 +466,8 @@
       { name: 'supervisorId', label: 'المشرف', type: 'select', options: sups, placeholder: 'اختر المشرف', required: true },
       { name: 'open', label: 'بداية الدوام', type: 'time', required: true },
       { name: 'close', label: 'نهاية الدوام', type: 'time', required: true },
-      { name: 'dept', label: 'القسم المالك', type: 'select', required: true, span: true, placeholder: 'اختر القسم', options: S.coll('departments').map((d) => ({ value: d.name, label: d.name })) },
+      { name: 'campusId', label: 'الحرم', type: 'select', required: true, options: S.coll('campuses').map((c) => ({ value: c.id, label: c.name })) },
+      { name: 'dept', label: 'القسم المالك', type: 'select', required: true, placeholder: 'اختر القسم', options: S.coll('departments').map((d) => ({ value: d.name, label: d.name })) },
       { name: 'description', label: 'وصف وتجهيزات المعمل', type: 'textarea', span: true }
     ];
     U.modal({
@@ -476,7 +497,7 @@
       items.map((d) => {
         const warrantyOk = d.warrantyEnd && d.warrantyEnd >= today();
         return '<tr><td><a class="tag" href="#dev-' + d.id + '">' + h(d.tag) + '</a></td><td><div class="cell-main"><a href="#dev-' + d.id + '" style="color:inherit;text-decoration:none">' + h(d.name) + '</a></div><div class="cell-sub">' + h(d.model) + '</div></td>' +
-          (compact ? '' : '<td><a href="#lab-' + d.labId + '" style="color:inherit">' + h(labName(d.labId)) + '</a></td>') +
+          (compact ? '' : '<td><a href="#lab-' + d.labId + '" style="color:inherit">' + h(labName(d.labId)) + '</a><div class="cell-sub">' + h(station(d.stationId) ? station(d.stationId).name : '—') + '</div></td>') +
           '<td>' + pill(DEV_STATUS, d.status) + '</td><td>' + calPill(d) + '</td>' +
           '<td class="hide-sm small ' + (warrantyOk ? '' : 'muted') + '">' + (d.warrantyEnd ? (warrantyOk ? 'حتى ' : 'انتهى ') + U.fmtDate(d.warrantyEnd) : '—') + '</td>' +
           '<td><div class="row-actions"><button class="icon-btn" data-act="viewDevice" data-id="' + d.id + '" title="عرض" aria-label="عرض">' + icon('eye') + '</button>' +
@@ -495,7 +516,8 @@
       '<div class="page-head"><div class="t"><h2>الأجهزة والمعدات</h2><p>' + all.length + ' جهازًا · ' + counts.working + ' يعمل · ' + counts.maintenance + ' في الصيانة · ' + counts.broken + ' معطّل</p></div><div class="actions">' +
       (isStaff() ? '<button class="btn" data-act="exportDevices">' + icon('download') + 'تصدير CSV</button><button class="btn btn-primary" data-act="newDevice">' + icon('plus') + 'إضافة جهاز</button>' : '') + '</div></div>' +
       '<section class="card"><div class="toolbar">' +
-      '<div class="search">' + icon('search') + '<input class="input" id="dev-q" type="search" placeholder="ابحث برقم الأصل أو الاسم أو الطراز أو الرقم التسلسلي" value="' + h(f.q) + '"></div>' +
+      '<div class="search">' + icon('search') + '<input class="input" id="dev-q" type="search" placeholder="ابحث برقم الأصل أو الباركود أو الاسم أو الرقم التسلسلي" value="' + h(f.q) + '"></div>' +
+      '<select class="select" id="dev-campus" aria-label="الحرم"><option value="">كل المواقع</option>' + S.coll('campuses').map((c) => '<option value="' + c.id + '"' + (f.campus === c.id ? ' selected' : '') + '>' + h(c.name) + '</option>').join('') + '</select>' +
       '<select class="select" id="dev-lab" aria-label="المعمل"><option value="">كل المعامل</option>' + S.coll('labs').map((l) => '<option value="' + l.id + '"' + (f.lab === l.id ? ' selected' : '') + '>' + h(l.name) + '</option>').join('') + '</select>' +
       '<select class="select" id="dev-status" aria-label="الحالة"><option value="">كل الحالات</option>' + optsOf(DEV_STATUS).map((o) => '<option value="' + o.value + '"' + (f.status === o.value ? ' selected' : '') + '>' + o.label + '</option>').join('') + '<option value="cal"' + (f.status === 'cal' ? ' selected' : '') + '>تستحق المعايرة (14 يومًا)</option></select>' +
       '<select class="select" id="dev-type" aria-label="النوع"><option value="">كل الأنواع</option>' + optsOf(DEV_TYPE).map((o) => '<option value="' + o.value + '"' + (f.type === o.value ? ' selected' : '') + '>' + o.label + '</option>').join('') + '</select>' +
@@ -510,7 +532,7 @@
           list.innerHTML = devicesTable(items);
           cnt.textContent = 'عرض ' + items.length + ' من ' + all.length;
         };
-        bindFilters(root, { '#dev-q': ['q', f], '#dev-lab': ['lab', f], '#dev-status': ['status', f], '#dev-type': ['type', f] }, draw);
+        bindFilters(root, { '#dev-q': ['q', f], '#dev-campus': ['campus', f], '#dev-lab': ['lab', f], '#dev-status': ['status', f], '#dev-type': ['type', f] }, draw);
         draw();
       }
     };
@@ -518,7 +540,8 @@
   function filteredDevices(f, q) {
     return S.coll('devices').filter((d) => (!f.lab || d.labId === f.lab) && (!f.type || d.type === f.type) &&
       (!f.status || (f.status === 'cal' ? (calState(d) && calState(d).days <= 14) : d.status === f.status)) &&
-      (!q || (d.tag + ' ' + d.name + ' ' + d.model + ' ' + d.serial).toLowerCase().includes(q)))
+      (!f.campus || (lab(d.labId) || {}).campusId === f.campus) &&
+      (!q || (d.tag + ' ' + d.name + ' ' + d.model + ' ' + d.serial + ' ' + (d.barcode || '')).toLowerCase().includes(q)))
       .sort((a, b) => a.tag.localeCompare(b.tag));
   }
 
@@ -533,6 +556,8 @@
       { name: 'labId', label: 'المعمل', type: 'select', options: labsOpt, required: true },
       { name: 'model', label: 'الطراز', ltr: true, placeholder: 'Rigol DS1054Z' },
       { name: 'serial', label: 'الرقم التسلسلي', ltr: true },
+      { name: 'stationId', label: 'المحطة', type: 'select', options: S.coll('stations').filter((x) => x.labId === v.labId).map((x) => ({ value: x.id, label: x.name + ' · ' + x.code })), placeholder: 'بدون محطة' },
+      { name: 'barcode', label: 'الباركود', ltr: true, placeholder: 'يُولّد تلقائيًا إذا تُرك فارغًا' },
       { name: 'status', label: 'الحالة', type: 'select', options: optsOf(DEV_STATUS), required: true },
       { name: 'purchaseDate', label: 'تاريخ الشراء', type: 'date' },
       { name: 'warrantyEnd', label: 'نهاية الضمان', type: 'date' },
@@ -541,11 +566,18 @@
     ];
     U.modal({
       title: existing ? 'تعديل بيانات الجهاز' : 'إضافة جهاز', body: U.formGrid(fields, v), submitText: existing ? 'حفظ التعديلات' : 'إضافة الجهاز',
+      onOpen(form) {
+        const lSel = form.querySelector('#f-labId'), sSel = form.querySelector('#f-stationId');
+        lSel.addEventListener('change', () => { sSel.innerHTML = '<option value="">بدون محطة</option>' + S.coll('stations').filter((x) => x.labId === lSel.value).map((x) => '<option value="' + x.id + '">' + h(x.name + ' · ' + x.code) + '</option>').join(''); });
+      },
       onSubmit(form) {
         const d = U.formData(form);
         for (const f of fields) if (f.required && !d[f.name]) return 'الحقل «' + f.label + '» مطلوب.';
         d.tag = d.tag.toUpperCase();
         if (S.coll('devices').some((x) => x.tag === d.tag && (!existing || x.id !== existing.id))) return 'رقم الأصل ' + d.tag + ' مسجل لجهاز آخر.';
+        if (!d.barcode) d.barcode = '628' + String(Date.now()).slice(-9);
+        if (!/^\d{6,14}$/.test(d.barcode)) return 'الباركود أرقام فقط (6 إلى 14 رقمًا).';
+        if (S.coll('devices').some((x) => x.barcode === d.barcode && (!existing || x.id !== existing.id))) return 'الباركود مستخدم لجهاز آخر.';
         if (d.warrantyEnd && d.purchaseDate && d.warrantyEnd < d.purchaseDate) return 'نهاية الضمان لا يمكن أن تسبق تاريخ الشراء.';
         const stamp = { at: nowISO(), userId: me.id };
         if (existing) {
@@ -571,14 +603,14 @@
   const addMonthsISO = (ds, n) => { const [y, m, dd] = ds.split('-').map(Number); return iso(new Date(y, m - 1 + n, dd)); };
   function devPush(id, changes, entries) {
     const d = dev(id); if (!d) return;
-    S.upsert('devices', Object.assign({}, d, changes || {}, { history: (d.history || []).concat(entries.map((e) => Object.assign({ at: nowISO(), userId: me.id }, e))) }));
+    S.upsert('devices', Object.assign({}, d, changes || {}, { history: (d.history || []).concat(entries.map((e) => Object.assign({ at: nowISO(), userId: me ? me.id : '' }, e))) }));
   }
   function setDevStatus(id, to, text) { const d = dev(id); if (d && d.status !== to) devPush(id, { status: to }, [{ kind: 'status', from: d.status, to, text: text || '' }]); }
   function moveDev(id, toLab, text) { const d = dev(id); if (d && d.labId !== toLab) devPush(id, { labId: toLab }, [{ kind: 'move', from: d.labId, to: toLab, text: text || '' }]); }
 
   function deviceEvents(d) {
     const ev = (d.history || []).map((e) => Object.assign({ d }, e));
-    S.coll('tickets').filter((t) => t.deviceId === d.id).forEach((t) => (t.log || []).filter((e) => e.kind === 'status').forEach((e) => ev.push({ d, at: e.at, userId: e.userId, kind: 'ticket', t, status: e.status, text: e.text })));
+    S.coll('tickets').filter((t) => tkHas(t, d.id)).forEach((t) => (t.log || []).filter((e) => e.kind === 'status').forEach((e) => ev.push({ d, at: e.at, userId: e.userId, kind: 'ticket', t, status: e.status, text: e.text })));
     S.coll('requests').filter((r) => r.deviceId === d.id).forEach((r) => (r.log || []).filter((e) => e.kind === 'status' && ['new', 'approved', 'done', 'rejected'].includes(e.status)).forEach((e) => ev.push({ d, at: e.at, userId: e.userId, kind: 'request', r, status: e.status, text: e.text })));
     return ev.sort((a, b) => b.at.localeCompare(a.at));
   }
@@ -600,7 +632,7 @@
   function labEvents(labId) {
     const ev = [];
     S.coll('devices').filter((d) => d.labId === labId || (d.history || []).some((x) => x.kind === 'move' && x.from === labId)).forEach((d) => ev.push(...deviceEvents(d).filter((e) => e.kind !== 'request')));
-    S.coll('tickets').filter((t) => t.labId === labId && !t.deviceId).forEach((t) => (t.log || []).filter((e) => e.kind === 'status').forEach((e) => ev.push({ at: e.at, userId: e.userId, kind: 'ticket', t, status: e.status, text: e.text })));
+    S.coll('tickets').filter((t) => t.labId === labId && !tkDevIds(t).length).forEach((t) => (t.log || []).filter((e) => e.kind === 'status').forEach((e) => ev.push({ at: e.at, userId: e.userId, kind: 'ticket', t, status: e.status, text: e.text })));
     const seen = new Set();
     return ev.filter((e) => { const k = e.kind + e.at + (e.t ? e.t.id : '') + (e.d ? e.d.id : ''); if (seen.has(k)) return false; seen.add(k); return true; }).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 40);
   }
@@ -609,7 +641,7 @@
     const d = dev(id);
     if (!d) return { title: 'جهاز غير موجود', crumb: 'الأجهزة', html: '<div class="card">' + emptyState('cpu', 'لم يتم العثور على الجهاز. ربما تم حذفه.') + '<div style="text-align:center;padding-bottom:24px"><a class="btn" href="#devices">العودة إلى الأجهزة</a></div></div>' };
     const l = lab(d.labId) || {};
-    const tix = S.coll('tickets').filter((t) => t.deviceId === d.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const tix = S.coll('tickets').filter((t) => tkHas(t, d.id)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     const openT = tix.filter((t) => t.status !== 'resolved');
     const canM = managesLab(d.labId);
     const c = calState(d);
@@ -620,7 +652,7 @@
     const events = deviceEvents(d);
 
     const hero = '<section class="card"><div class="card-body dev-hero">' +
-      '<div class="asset-plate" aria-label="لوحة رقم الأصل"><span>رقم الأصل</span><b>' + h(d.tag) + '</b><small>S/N ' + h(d.serial || '—') + '</small><i class="barcode" aria-hidden="true"></i></div>' +
+      '<div class="asset-plate" aria-label="لوحة رقم الأصل"><span>رقم الأصل</span><b>' + h(d.tag) + '</b><small>S/N ' + h(d.serial || '—') + '</small>' + barcodeSVG(d.barcode) + '<small class="bc-digits">' + h(d.barcode || '') + '</small></div>' +
       '<div style="flex:1;min-width:220px;display:flex;flex-direction:column;gap:6px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' + pill(DEV_STATUS, d.status) + '<span class="type-chip">' + icon('cpu') + h(DEV_TYPE[d.type] || d.type) + '</span>' + (openT.length ? '<span class="pill bad">' + openT.length + ' بلاغ مفتوح</span>' : '') + '</div>' +
       '<h2 style="font-size:var(--fs-xl)">' + h(d.name) + '</h2><p class="muted small"><span class="ltr">' + h(d.model || '') + '</span> · <a href="#lab-' + d.labId + '">' + h(l.name || '—') + '</a></p></div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
@@ -629,14 +661,16 @@
       (canM ? '<button class="btn" data-act="editDevice" data-id="' + d.id + '">' + icon('edit') + 'تعديل</button>' : '') +
       '</div></div>' +
       '<div class="card-body" style="border-top:1px solid var(--line)"><div class="facts facts-4">' +
+      fact('الحرم', h(campusName(l.campusId))) +
       fact('المعمل', '<a href="#lab-' + d.labId + '">' + h(l.name || '—') + '</a>') +
+      fact('المحطة', h(stationLabel(d.stationId))) +
       fact('القسم', h(l.dept || '—')) +
       fact('تاريخ الشراء', U.fmtDate(d.purchaseDate) + (ageY >= 0.1 ? ' <span class="muted small">(' + (Math.round(ageY * 10) / 10) + ' سنة)</span>' : '')) +
       fact('الضمان', d.warrantyEnd ? (warrantyOk ? '<span class="pill ok">ساري حتى ' + U.fmtDate(d.warrantyEnd) + '</span>' : '<span class="pill">انتهى ' + U.fmtDate(d.warrantyEnd) + '</span>') : '—') +
       fact('المعايرة القادمة', calPill(d) + (d.calibrationDue && c && c.days > 14 ? '' : d.calibrationDue ? ' <span class="muted small">' + U.fmtDate(d.calibrationDue) + '</span>' : '')) +
       fact('آخر معايرة', lastCal ? U.fmtDate(lastCal.at.slice(0, 10)) + ' · ' + (lastCal.result === 'pass' ? 'مطابقة' : 'غير مطابقة') : '—') +
       fact('عدد البلاغات', tix.length + (openT.length ? ' <span class="muted small">(' + openT.length + ' مفتوح)</span>' : '')) +
-      fact('المشرف المسؤول', h(userName(l.supervisorId))) +
+      fact('المشرف المسؤول', h(userName(l.supervisorId))) + fact('الباركود', '<span class="mono">' + h(d.barcode || '—') + '</span>') + fact('النوع', h(DEV_TYPE[d.type])) +
       '</div>' + (d.notes ? '<p class="small" style="margin-top:14px"><span class="muted">ملاحظات: </span>' + h(d.notes) + '</p>' : '') + '</div></section>';
 
     const alerts = (c && c.days < 0 ? '<div class="alert bad">' + icon('gauge') + '<div class="grow"><b>المعايرة متأخرة ' + daysTxt(-c.days) + '.</b> لا يُنصح باستخدام الجهاز في القياسات حتى تتم معايرته.</div>' + (canM ? '<button class="btn btn-sm" data-act="recordCal" data-id="' + d.id + '">تسجيل معايرة</button>' : '') + '</div>' : '');
@@ -676,43 +710,217 @@
     });
   }
 
-  /* ===== صفحة البلاغ ===== */
+  /* ===== البلاغات: معالجة متعددة المستويات (مشرف المعمل ← الدعم الفني ← لجنة المعامل) ===== */
+  const ISSUE_TYPE = { hardware: ['عتاد وأجهزة', 'cpu'], software: ['برمجيات وتراخيص', 'doc'], network: ['شبكة وإنترنت', 'swap'], electrical: ['كهرباء وتكييف', 'alert'], furniture: ['أثاث ومرافق', 'box'], other: ['أخرى', 'info'] };
+  const APPROVAL_KIND = { purchase: 'شراء قطع أو معدات', replace: 'استبدال الجهاز', retire: 'إخراج الجهاز من الخدمة', external: 'صيانة خارجية لدى المورد' };
+  const AP_STATUS = { pending: ['بانتظار قرار اللجنة', 'warn'], approved: ['معتمد من اللجنة', 'ok'], rejected: ['مرفوض من اللجنة', 'bad'] };
+  const tkDevIds = (t) => (t.deviceIds && t.deviceIds.length ? t.deviceIds : (t.deviceId ? [t.deviceId] : []));
+  const tkDevices = (t) => tkDevIds(t).map(dev).filter(Boolean);
+  const tkHas = (t, id) => tkDevIds(t).includes(id);
+  const reporterName = (t) => t.guest ? (t.guest.name || 'زائر') + ' (زائر)' : userName(t.reporterId);
+  const canProcess = (t) => managesLab(t.labId) || (me.role === 'it' && !!t.forwardedIT);
+  const canDecide = () => isAdmin() || me.role === 'committee';
+  const canSeeTicket = (t) => isAdmin() || me.role === 'committee' || managesLab(t.labId) || t.reporterId === me.id || t.assigneeId === me.id || (me.role === 'it' && !!t.forwardedIT);
+  const approvalPending = (t) => !!(t.approval && t.approval.status === 'pending');
+  const station = (id) => S.byId('stations', id);
+  const campus = (id) => S.byId('campuses', id);
+  const campusName = (id) => (campus(id) || {}).name || '—';
+  const stationLabel = (id) => { const s = station(id); return s ? s.name + ' · ' + s.code : '—'; };
+  const currentSemester = () => {
+    const t = today(), ss = S.coll('semesters') || [];
+    return ss.find((s) => t >= s.start && t <= s.end) || ss.filter((s) => s.start > t).sort((a, b) => a.start.localeCompare(b.start))[0] || ss[ss.length - 1] || { id: '', name: '—' };
+  };
+  const semName = (id) => (S.byId('semesters', id) || {}).name || '—';
+  const fmtSAR = (n) => Number(n || 0).toLocaleString('en-US') + ' ر.س';
+
+  /* ضغط الصور المرفقة قبل حفظها في المتصفح */
+  function compressImage(file) {
+    return new Promise((resolve, reject) => {
+      if (!/^image\//.test(file.type)) return reject(new Error('يُقبل إرفاق الصور فقط'));
+      const fr = new FileReader();
+      fr.onerror = () => reject(new Error('تعذرت قراءة الملف'));
+      fr.onload = () => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('الملف ليس صورة صالحة'));
+        img.onload = () => {
+          const k = Math.min(1, 1000 / Math.max(img.width, img.height));
+          const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          resolve({ name: file.name, data: c.toDataURL('image/jpeg', 0.72) });
+        };
+        img.src = fr.result;
+      };
+      fr.readAsDataURL(file);
+    });
+  }
+  function bindAttachments(input, preview, holder, max) {
+    holder._att = holder._att || [];
+    const draw = () => { preview.innerHTML = holder._att.map((a, i) => '<span class="att-thumb"><img src="' + a.data + '" alt="' + h(a.name) + '"><button type="button" data-rm-att="' + i + '" aria-label="إزالة المرفق">' + icon('x') + '</button></span>').join(''); };
+    input.addEventListener('change', async () => {
+      for (const f of [...input.files]) {
+        if (holder._att.length >= max) { U.toast('الحد الأقصى ' + max + ' صور', 'bad'); break; }
+        try { holder._att.push(await compressImage(f)); } catch (e) { U.toast(e.message, 'bad'); }
+      }
+      input.value = ''; draw();
+    });
+    preview.addEventListener('click', (e) => { const b = e.target.closest('[data-rm-att]'); if (b) { holder._att.splice(+b.dataset.rmAtt, 1); draw(); } });
+  }
+  const attGallery = (list) => list.length ? '<div class="att-gallery">' + list.map((a, i) => '<button type="button" class="att-thumb lg" data-lightbox="' + i + '" title="' + h(a.name || '') + '"><img src="' + a.data + '" alt="' + h(a.name || 'مرفق') + '"></button>').join('') + '</div>' : '';
+  function lightbox(src, name) {
+    U.modal({ title: name || 'مرفق', body: '<img src="' + src + '" alt="' + h(name || '') + '" style="width:100%;border-radius:8px">' });
+  }
+
+  /* نموذج البلاغ المشترك: للمستخدمين وللزوار */
+  function ticketFormHTML(guest) {
+    const campuses = S.coll('campuses');
+    return (guest ? U.formGrid([{ name: 'gname', label: 'الاسم أو الجهة', placeholder: 'اختياري' }, { name: 'gemail', label: 'البريد الإلكتروني', type: 'email', required: true, ltr: true, hint: 'نحتاجه لتتبع البلاغ' }]) : '') +
+      U.formGrid([
+        { name: 'title', label: 'عنوان البلاغ', required: true, span: true, placeholder: 'مثال: الجهاز لا يعمل بعد التشغيل' },
+        { name: 'issueType', label: 'نوع العطل', type: 'select', required: true, options: optsOf(ISSUE_TYPE) },
+        guest ? { name: 'priority', label: 'مدى التأثير', type: 'select', options: [{ value: 'medium', label: 'يؤثر على الاستخدام' }, { value: 'low', label: 'بسيط' }, { value: 'high', label: 'يوقف العمل في المعمل' }] } : { name: 'priority', label: 'الأولوية', type: 'select', required: true, options: optsOf(TK_PRI) },
+        { name: 'campusId', label: 'الحرم', type: 'select', required: true, options: campuses.map((c) => ({ value: c.id, label: c.name })) },
+        { name: 'labId', label: 'المعمل', type: 'select', required: true, options: [] },
+        { name: 'stationId', label: 'المحطة', type: 'select', span: true, options: [] }
+      ], { priority: 'medium', issueType: 'hardware' }) +
+      '<div class="field"><label>الأجهزة المتأثرة <span class="muted small">(اختر جهازًا أو أكثر، اختياري)</span></label><div class="dev-picks" id="f-devices"></div></div>' +
+      U.field({ name: 'description', label: 'وصف العطل', type: 'textarea', placeholder: 'متى بدأ العطل؟ ما الرسالة التي تظهر؟ ما الذي جربته؟' }) +
+      '<div class="field"><label for="f-files">صور مرفقة <span class="muted small">(حتى 3 صور)</span></label><input type="file" id="f-files" accept="image/*" multiple class="input" style="padding-top:6px"><div class="att-preview" id="f-preview"></div></div>';
+  }
+  function bindTicketForm(form, pre) {
+    pre = pre || {};
+    const cSel = form.querySelector('#f-campusId'), lSel = form.querySelector('#f-labId'), sSel = form.querySelector('#f-stationId'), box = form.querySelector('#f-devices');
+    const opt = (v, l, sel) => '<option value="' + h(v) + '"' + (sel ? ' selected' : '') + '>' + h(l) + '</option>';
+    const preLab = pre.labId ? lab(pre.labId) : null;
+    if (preLab) cSel.value = preLab.campusId;
+    const chosen = new Set(pre.deviceIds || []);
+    const fillLabs = (keep) => { const ls = S.coll('labs').filter((l) => l.campusId === cSel.value); lSel.innerHTML = opt('', 'اختر المعمل') + ls.map((l) => opt(l.id, l.name + ' · ' + l.code, l.id === keep)).join(''); };
+    const fillStations = (keep) => { const ss = S.coll('stations').filter((s) => s.labId === lSel.value); sSel.innerHTML = opt('', lSel.value ? 'المعمل كاملًا (بدون محطة محددة)' : 'اختر المعمل أولًا') + ss.map((s) => opt(s.id, s.name + ' · ' + s.code, s.id === keep)).join(''); sSel.disabled = !lSel.value; };
+    const fillDevices = () => {
+      const ds = S.coll('devices').filter((d) => d.status !== 'retired' && d.labId === lSel.value && (!sSel.value || d.stationId === sSel.value));
+      box.innerHTML = !lSel.value ? '<span class="muted small">اختر المعمل لعرض أجهزته</span>' : ds.length ? ds.map((d) => '<label class="dev-pick"><input type="checkbox" name="dev" value="' + d.id + '"' + (chosen.has(d.id) ? ' checked' : '') + '><span class="dot ' + DEV_STATUS[d.status][1] + '"></span><b class="mono">' + h(d.tag) + '</b><span>' + h(d.name) + '</span></label>').join('') : '<span class="muted small">لا توجد أجهزة مسجلة هنا</span>';
+    };
+    box.addEventListener('change', (e) => { if (e.target.name === 'dev') { if (e.target.checked) chosen.add(e.target.value); else chosen.delete(e.target.value); } });
+    cSel.addEventListener('change', () => { fillLabs(''); fillStations(''); fillDevices(); });
+    lSel.addEventListener('change', () => { fillStations(''); fillDevices(); });
+    sSel.addEventListener('change', fillDevices);
+    fillLabs(pre.labId || ''); fillStations(pre.stationId || ''); fillDevices();
+    bindAttachments(form.querySelector('#f-files'), form.querySelector('#f-preview'), form, 3);
+  }
+  function readTicketForm(form, guest) {
+    const v = U.formData(form);
+    if (guest && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.gemail || '')) return { err: 'اكتب بريدًا إلكترونيًا صحيحًا لتتمكن من تتبع البلاغ.' };
+    if (!v.title || v.title.length < 4) return { err: 'اكتب عنوانًا واضحًا للبلاغ.' };
+    if (!v.labId) return { err: 'اختر الحرم والمعمل الذي فيه العطل.' };
+    const deviceIds = [...form.querySelectorAll('input[name=dev]:checked')].map((x) => x.value);
+    return { data: { title: v.title, issueType: v.issueType, priority: v.priority || 'medium', labId: v.labId, stationId: v.stationId || '', deviceIds, description: v.description || '', attachments: form._att || [], guest: guest ? { name: v.gname || '', email: v.gemail.toLowerCase() } : null } };
+  }
+  function createTicket(d) {
+    const l = lab(d.labId);
+    const uid0 = me ? me.id : '';
+    const tk = { ref: S.nextTicketRef(), labId: d.labId, stationId: d.stationId, deviceIds: d.deviceIds, deviceId: d.deviceIds[0] || '', title: d.title, description: d.description, issueType: d.issueType, priority: d.priority, status: 'open', reporterId: uid0, assigneeId: l.supervisorId, createdAt: today(), resolvedAt: '', semesterId: currentSemester().id, attachments: d.attachments, log: [{ at: nowISO(), userId: uid0, kind: 'status', status: 'open', text: '' }] };
+    if (d.guest) tk.guest = d.guest;
+    const saved = S.upsert('tickets', tk, 'tk');
+    d.deviceIds.forEach((id) => { const dv = dev(id); if (dv && dv.status === 'working') setDevStatus(id, d.priority === 'urgent' ? 'broken' : 'maintenance', 'بسبب البلاغ ' + tk.ref); });
+    S.log(uid0, (d.guest ? 'أبلغ زائر (' + d.guest.email + ') عن عطل ' : 'فتح بلاغ صيانة ') + tk.ref + ' «' + tk.title + '»');
+    return saved;
+  }
+  function ticketModal(pre) {
+    U.modal({
+      title: 'بلاغ عطل جديد', body: ticketFormHTML(false) + '<p class="muted small">يصل البلاغ إلى مشرف المعمل مباشرة، وتتحول الأجهزة المختارة إلى «في الصيانة» حتى يُحل.</p>', submitText: 'إرسال البلاغ',
+      onOpen(form) { bindTicketForm(form, pre); },
+      onSubmit(form) {
+        const r = readTicketForm(form, false);
+        if (r.err) return r.err;
+        const saved = createTicket(r.data);
+        U.toast('تم إرسال البلاغ ' + saved.ref + ' إلى ' + userName(saved.assigneeId));
+        setTimeout(() => go('tk-' + saved.id));
+      }
+    });
+  }
+
   const TK_FLOW = {
     start: { to: 'in_progress', verb: 'بدأ معالجة البلاغ', toast: 'بدأت معالجة البلاغ' },
     resolve: { to: 'resolved', verb: 'أغلق البلاغ', toast: 'تم حل البلاغ', note: 'required', title: 'إغلاق البلاغ', label: 'الإجراء المتخذ لإصلاح العطل', btn: 'تأكيد الحل' },
     reopen: { to: 'open', verb: 'أعاد فتح البلاغ', toast: 'أُعيد فتح البلاغ', note: 'required', title: 'إعادة فتح البلاغ', label: 'سبب إعادة الفتح', btn: 'إعادة فتح' }
   };
-  const canSeeTicket = (t) => isAdmin() || managesLab(t.labId) || t.reporterId === me.id || (isStaff() && t.assigneeId === me.id);
+  function tkSave(t, changes, entry) {
+    const cur = S.byId('tickets', t.id) || t;
+    S.upsert('tickets', Object.assign({}, cur, changes, { log: (cur.log || []).concat(entry ? [Object.assign({ at: nowISO(), userId: me ? me.id : '' }, entry)] : []) }));
+  }
   function tkApply(t, action, text) {
     const fl = TK_FLOW[action];
-    const upd = Object.assign({}, t, { status: fl.to, resolvedAt: fl.to === 'resolved' ? today() : fl.to === 'open' ? '' : t.resolvedAt, log: (t.log || []).concat([{ at: nowISO(), userId: me.id, kind: 'status', status: fl.to, text: text || '' }]) });
-    if (action === 'resolve') upd.resolution = text;
-    if (action === 'start' && !t.assigneeId) upd.assigneeId = me.id;
-    S.upsert('tickets', upd);
-    const d = dev(t.deviceId);
-    let extra = '';
-    if (d && fl.to === 'resolved' && (d.status === 'maintenance' || d.status === 'broken')) {
-      const stillOpen = S.coll('tickets').some((x) => x.id !== t.id && x.deviceId === d.id && x.status !== 'resolved');
-      if (!stillOpen) { setDevStatus(d.id, 'working', 'بعد حل البلاغ ' + t.ref); extra = ' وعاد الجهاز للخدمة'; }
-    }
-    if (d && fl.to === 'open' && d.status === 'working') setDevStatus(d.id, 'maintenance', 'إعادة فتح البلاغ ' + t.ref);
+    if (action === 'resolve' && approvalPending(t)) return 'لا يمكن إغلاق البلاغ قبل قرار لجنة المعامل على طلب الموافقة.';
+    const changes = { status: fl.to, resolvedAt: fl.to === 'resolved' ? today() : fl.to === 'open' ? '' : t.resolvedAt };
+    if (action === 'resolve') changes.resolution = text;
+    if (action === 'start' && !t.assigneeId) changes.assigneeId = me.id;
+    tkSave(t, changes, { kind: 'status', status: fl.to, text: text || '' });
+    let back = 0;
+    tkDevices(t).forEach((d) => {
+      if (fl.to === 'resolved' && (d.status === 'maintenance' || d.status === 'broken') && !S.coll('tickets').some((x) => x.id !== t.id && tkHas(x, d.id) && x.status !== 'resolved')) { setDevStatus(d.id, 'working', 'بعد حل البلاغ ' + t.ref); back++; }
+      if (fl.to === 'open' && d.status === 'working') setDevStatus(d.id, 'maintenance', 'إعادة فتح البلاغ ' + t.ref);
+    });
     S.log(me.id, fl.verb + ' ' + t.ref + ' «' + t.title + '»');
-    U.toast(fl.toast + extra);
+    U.toast(fl.toast + (back ? (back === 1 ? ' وعاد الجهاز للخدمة' : ' وعادت ' + back + ' أجهزة للخدمة') : ''));
     setTimeout(render);
     return '';
   }
   function tkAct(t, action) {
-    if (action === 'assign') {
-      const staff = S.coll('users').filter((u) => u.active && (u.role === 'admin' || u.role === 'supervisor')).map((u) => ({ value: u.id, label: u.name + ' · ' + ROLE[u.role][0] }));
+    const staffOpts = (roles) => S.coll('users').filter((u) => u.active && roles.includes(u.role)).map((u) => ({ value: u.id, label: u.name + ' · ' + ROLE[u.role][0] }));
+    if (action === 'assign' || action === 'forward') {
+      const fwd = action === 'forward';
+      const opts = staffOpts(fwd ? ['it'] : ['admin', 'supervisor', 'it']);
+      if (!opts.length) { U.toast('لا يوجد مستخدم بدور الدعم الفني. أضفه من صفحة المستخدمين.', 'bad'); return; }
       U.modal({
-        title: 'تحويل البلاغ ' + t.ref, size: 'sm', body: U.field({ name: 'to', label: 'المسؤول عن المعالجة', type: 'select', options: staff, required: true }, t.assigneeId) + U.field({ name: 'text', label: 'ملاحظة', type: 'textarea', placeholder: 'اختياري' }), submitText: 'تحويل',
+        title: (fwd ? 'تحويل إلى الدعم الفني · ' : 'إسناد البلاغ · ') + t.ref, size: 'sm',
+        body: U.field({ name: 'to', label: fwd ? 'موظف الدعم الفني' : 'المسؤول عن المعالجة', type: 'select', options: opts, required: true }, fwd ? opts[0].value : t.assigneeId) + U.field({ name: 'text', label: fwd ? 'سبب التحويل' : 'ملاحظة', type: 'textarea', placeholder: fwd ? 'مثال: العطل في إعدادات الشبكة ويحتاج صلاحيات الدعم الفني' : 'اختياري' }),
+        submitText: fwd ? 'تحويل' : 'إسناد',
         onSubmit(form) {
           const v = U.formData(form);
-          if (!v.to) return 'اختر المسؤول.';
-          if (v.to === t.assigneeId) return 'البلاغ مسند إلى ' + userName(v.to) + ' بالفعل.';
-          S.upsert('tickets', Object.assign({}, t, { assigneeId: v.to, log: (t.log || []).concat([{ at: nowISO(), userId: me.id, kind: 'assign', to: v.to, text: v.text || '' }]) }));
-          S.log(me.id, 'حوّل البلاغ ' + t.ref + ' إلى ' + userName(v.to));
-          U.toast('تم تحويل البلاغ إلى ' + userName(v.to));
+          if (!v.to) return 'اختر المستخدم.';
+          if (!fwd && v.to === t.assigneeId) return 'البلاغ مسند إلى ' + userName(v.to) + ' بالفعل.';
+          tkSave(t, fwd ? { assigneeId: v.to, forwardedIT: true } : { assigneeId: v.to }, { kind: fwd ? 'forward' : 'assign', to: v.to, text: v.text || '' });
+          S.log(me.id, (fwd ? 'حوّل البلاغ ' + t.ref + ' إلى الدعم الفني (' : 'أسند البلاغ ' + t.ref + ' إلى ') + userName(v.to) + (fwd ? ')' : ''));
+          U.toast(fwd ? 'حُوّل البلاغ إلى الدعم الفني: ' + userName(v.to) : 'تم إسناد البلاغ إلى ' + userName(v.to));
+          setTimeout(render);
+        }
+      });
+      return;
+    }
+    if (action === 'escalate') {
+      U.modal({
+        title: 'طلب موافقة لجنة المعامل · ' + t.ref, size: 'sm',
+        body: '<p class="small muted">يُرفع الطلب إلى لجنة المعامل عندما يحتاج الإصلاح شراءً أو استبدالًا أو إخراج الجهاز من الخدمة. لا يُغلق البلاغ قبل قرار اللجنة.</p>' +
+          U.field({ name: 'kind', label: 'نوع الطلب', type: 'select', required: true, options: optsOf(APPROVAL_KIND) }) +
+          U.field({ name: 'cost', label: 'التكلفة التقديرية (ر.س)', type: 'number', min: 0, placeholder: '0' }) +
+          U.field({ name: 'reason', label: 'المبررات', type: 'textarea', required: true, placeholder: 'لماذا يلزم هذا الإجراء؟ ما البدائل التي جُربت؟' }),
+        submitText: 'رفع للجنة',
+        onSubmit(form) {
+          const v = U.formData(form);
+          if (!v.reason) return 'اكتب مبررات الطلب.';
+          const cost = v.cost ? Math.max(0, parseFloat(v.cost)) : 0;
+          tkSave(t, { approval: { status: 'pending', kind: v.kind, cost, reason: v.reason, requestedBy: me.id, at: nowISO() } }, { kind: 'escalate', text: APPROVAL_KIND[v.kind] + (cost ? ' · ' + fmtSAR(cost) : '') + ' — ' + v.reason });
+          S.log(me.id, 'رفع البلاغ ' + t.ref + ' إلى لجنة المعامل للموافقة');
+          U.toast('رُفع الطلب إلى لجنة المعامل');
+          setTimeout(render);
+        }
+      });
+      return;
+    }
+    if (action === 'approve' || action === 'decline') {
+      const ok = action === 'approve';
+      U.modal({
+        title: (ok ? 'اعتماد الطلب · ' : 'رفض الطلب · ') + t.ref, size: 'sm',
+        body: '<p class="small">' + h(APPROVAL_KIND[t.approval.kind]) + (t.approval.cost ? ' · <b>' + fmtSAR(t.approval.cost) + '</b>' : '') + '</p><p class="small muted">' + h(t.approval.reason) + '</p>' +
+          U.field({ name: 'note', label: ok ? 'ملاحظة القرار' : 'سبب الرفض', type: 'textarea', required: !ok, placeholder: ok ? 'اختياري' : '' }),
+        submitText: ok ? 'اعتماد' : 'رفض', submitClass: ok ? 'btn-ok' : 'btn-danger',
+        onSubmit(form) {
+          const note = U.formData(form).note;
+          if (!ok && !note) return 'اكتب سبب الرفض.';
+          tkSave(t, { approval: Object.assign({}, t.approval, { status: ok ? 'approved' : 'rejected', decidedBy: me.id, decidedAt: nowISO(), note: note || '' }) }, { kind: 'approval', decision: ok ? 'approved' : 'rejected', text: note || '' });
+          let extra = '';
+          if (ok && t.approval.kind === 'retire') { tkDevices(t).forEach((d) => setDevStatus(d.id, 'retired', 'بقرار لجنة المعامل · ' + t.ref)); extra = ' وأُخرجت الأجهزة من الخدمة'; }
+          S.log(me.id, (ok ? 'اعتمد' : 'رفض') + ' طلب الموافقة على البلاغ ' + t.ref);
+          U.toast((ok ? 'تم اعتماد الطلب' : 'تم رفض الطلب') + extra, ok ? 'ok' : 'bad');
           setTimeout(render);
         }
       });
@@ -720,7 +928,7 @@
     }
     const fl = TK_FLOW[action];
     if (!fl) return;
-    if (!fl.note) { tkApply(t, action); return; }
+    if (!fl.note) { const err = tkApply(t, action); if (err) U.toast(err, 'bad'); return; }
     U.modal({
       title: fl.title + ' · ' + t.ref, size: 'sm',
       body: '<p class="small">«' + h(t.title) + '»</p>' + U.field({ name: 'note', label: fl.label, type: 'textarea', required: true, placeholder: action === 'resolve' ? 'مثال: استبدال وحدة التخزين واختبار الجهاز 30 دقيقة' : '' }),
@@ -729,70 +937,333 @@
     });
   }
 
-  function viewTicketPage(id) {
-    const t = S.byId('tickets', id);
-    if (!t || !canSeeTicket(t)) return { title: 'بلاغ غير موجود', crumb: 'الصيانة', html: '<div class="card">' + emptyState('wrench', 'البلاغ غير موجود أو ليس لديك صلاحية عرضه') + '<div style="text-align:center;padding-bottom:24px"><a class="btn" href="#maintenance">العودة إلى البلاغات</a></div></div>' };
-    const d = dev(t.deviceId), l = lab(t.labId) || {};
+  function ticketThread(t, viewer) {
+    const internalOK = viewer !== 'public' && (canProcess(t) || canDecide());
+    const log = (t.log || []).filter((e) => internalOK || !e.internal);
+    return '<div class="thread">' + log.map((e, idx) => {
+      const name = e.userId ? userName(e.userId) : (t.guest ? reporterName(t) : 'زائر');
+      const att = e.attachments && e.attachments.length ? attGallery(e.attachments) : '';
+      if (e.kind === 'comment') return '<div class="ev"><div class="avatar">' + h(U.initials(name)) + '</div><div style="min-width:0"><div class="hd"><b>' + h(name) + '</b>' + (e.internal ? '<span class="pill">ملاحظة داخلية</span>' : '') + '<time>' + U.timeAgo(e.at) + '</time></div><div class="bubble' + (e.internal ? ' internal' : '') + '">' + h(e.text) + '</div>' + att + '</div></div>';
+      let verb = '', ic = 'refresh', pl = '';
+      if (e.kind === 'status') { verb = { open: idx === 0 ? 'أبلغ عن العطل' : 'أعاد فتح البلاغ', in_progress: 'بدأ المعالجة', resolved: 'أغلق البلاغ' }[e.status]; ic = e.status === 'resolved' ? 'check' : e.status === 'open' ? 'alert' : 'refresh'; pl = pill(TK_STATUS, e.status); }
+      else if (e.kind === 'assign') { verb = 'أسند البلاغ إلى ' + userName(e.to); ic = 'users'; }
+      else if (e.kind === 'forward') { verb = 'حوّل البلاغ إلى الدعم الفني: ' + userName(e.to); ic = 'send'; pl = '<span class="pill info">المستوى 2</span>'; }
+      else if (e.kind === 'escalate') { verb = 'رفع طلب موافقة إلى لجنة المعامل'; ic = 'flag'; pl = '<span class="pill warn">المستوى 3</span>'; }
+      else if (e.kind === 'approval') { verb = e.decision === 'approved' ? 'اعتمدت اللجنة الطلب' : 'رفضت اللجنة الطلب'; ic = e.decision === 'approved' ? 'check' : 'x'; pl = pill(AP_STATUS, e.decision); }
+      return '<div class="ev sys"><div class="avatar">' + icon(ic).replace('<svg', '<svg width="15" height="15"') + '</div><div style="min-width:0"><div class="hd"><b>' + h(name) + '</b><span>' + h(verb) + '</span>' + pl + '<time>' + U.timeAgo(e.at) + '</time></div>' + (e.text ? '<div class="bubble">' + h(e.text) + '</div>' : '') + att + '</div></div>';
+    }).join('') + '</div>';
+  }
+  const tkStepper = (t) => {
     const log = t.log || [];
-    const can = managesLab(t.labId);
     const stamp = (st0) => { const e = log.filter((x) => x.kind === 'status' && x.status === st0).pop(); return e ? fmtStamp(e.at) : ''; };
     const steps = [['الإبلاغ', stamp('open')], ['المعالجة', stamp('in_progress')], ['الحل', stamp('resolved')]];
     const cur = t.status === 'resolved' ? 3 : 1;
-    const hint = t.status === 'open' ? 'بانتظار البدء' : t.status === 'in_progress' ? 'جارية' : '';
-    const stepper = '<div class="stepper" style="grid-template-columns:repeat(3,minmax(0,1fr))">' + steps.map((s, i) => {
-      const cls = i < cur ? 'done' : i === cur ? 'cur' : '';
-      return '<div class="step ' + cls + '"><div class="dot">' + (i < cur ? icon('check') : i + 1) + '</div><div>' + s[0] + ((i < cur ? s[1] : i === cur ? hint : '') ? '<small>' + h(i < cur ? s[1] : hint) + '</small>' : '') + '</div></div>';
+    const hint = t.status === 'open' ? 'بانتظار البدء' : t.status === 'in_progress' ? (approvalPending(t) ? 'بانتظار اللجنة' : 'جارية') : '';
+    return '<div class="stepper" style="grid-template-columns:repeat(3,minmax(0,1fr))">' + steps.map((s, i) => {
+      const cls = i < cur ? 'done' : i === cur ? (approvalPending(t) ? 'hold' : 'cur') : '';
+      const sub = i < cur ? s[1] : i === cur ? hint : '';
+      return '<div class="step ' + cls + '"><div class="dot">' + (i < cur ? icon('check') : i + 1) + '</div><div>' + s[0] + (sub ? '<small>' + h(sub) + '</small>' : '') + '</div></div>';
     }).join('') + '</div>';
+  };
+  const locPath = (t) => {
+    const l = lab(t.labId) || {}, s = station(t.stationId);
+    const seg = (lbl, val, href) => '<' + (href ? 'a href="' + href + '"' : 'div') + ' class="loc-seg"><span>' + h(lbl) + '</span><b>' + h(val) + '</b></' + (href ? 'a' : 'div') + '>';
+    return '<div class="loc-path">' + seg('الحرم', campusName(l.campusId), '#campuses') + icon('chevronL') + seg('المعمل', l.name || '—', '#lab-' + t.labId) + icon('chevronL') + seg('المحطة', s ? s.name + ' · ' + s.code : 'المعمل كاملًا') + '</div>';
+  };
+
+  function viewTicketPage(id) {
+    const t = S.byId('tickets', id);
+    if (!t || !canSeeTicket(t)) return { title: 'بلاغ غير موجود', crumb: 'البلاغات', html: '<div class="card">' + emptyState('wrench', 'البلاغ غير موجود أو ليس لديك صلاحية عرضه') + '<div style="text-align:center;padding-bottom:24px"><a class="btn" href="#maintenance">العودة إلى البلاغات</a></div></div>' };
+    const l = lab(t.labId) || {};
+    const devs = tkDevices(t);
+    const can = canProcess(t);
+    const ap = t.approval;
     const btn = (a, label, cls, ic) => '<button class="btn ' + (cls || '') + '" data-act="tkAct" data-id="' + t.id + '|' + a + '">' + (ic ? icon(ic) : '') + label + '</button>';
     let b = '';
     if (can) {
       if (t.status === 'open') b += btn('start', 'بدء المعالجة', 'btn-primary', 'refresh');
-      if (t.status !== 'resolved') b += btn('resolve', 'تم الحل', 'btn-ok', 'check') + btn('assign', 'تحويل', '', 'users');
+      if (t.status !== 'resolved') b += btn('resolve', 'تم الحل', 'btn-ok', 'check');
+      if (t.status !== 'resolved' && managesLab(t.labId) && !t.forwardedIT) b += btn('forward', 'تحويل للدعم الفني', '', 'send');
+      if (t.status !== 'resolved' && !approvalPending(t)) b += btn('escalate', 'طلب موافقة اللجنة', '', 'flag');
+      if (t.status !== 'resolved' && managesLab(t.labId)) b += btn('assign', 'إسناد', 'btn-ghost', 'users');
       if (t.status === 'resolved') b += btn('reopen', 'إعادة فتح', '', 'refresh');
     }
-    const note = t.status === 'resolved' ? 'البلاغ مغلق' : 'المسؤول: ' + userName(t.assigneeId);
-    const created = log[0] ? log[0].at : t.createdAt;
-    const endDate = t.resolvedAt || today();
-    const days = Math.round((U.parseDate(endDate) - U.parseDate(t.createdAt)) / 864e5);
+    if (approvalPending(t) && canDecide()) b = btn('approve', 'اعتماد طلب اللجنة', 'btn-ok', 'check') + btn('decline', 'رفض', 'btn-danger', 'x') + b;
+    const note = t.status === 'resolved' ? 'البلاغ مغلق' : approvalPending(t) ? 'بانتظار قرار لجنة المعامل' : 'المسؤول الآن: ' + userName(t.assigneeId);
+    const created = (t.log || [])[0] ? t.log[0].at : t.createdAt;
+    const days = Math.round((U.parseDate(t.resolvedAt || today()) - U.parseDate(t.createdAt)) / 864e5);
     const fact = (k, v) => '<div class="fact"><span>' + h(k) + '</span><b>' + v + '</b></div>';
-    const thread = log.length ? '<div class="thread">' + log.map((e) => {
-      const u = user(e.userId) || { name: '—' };
-      if (e.kind === 'comment') return '<div class="ev"><div class="avatar">' + h(U.initials(u.name)) + '</div><div style="min-width:0"><div class="hd"><b>' + h(u.name) + '</b><time>' + U.timeAgo(e.at) + '</time></div><div class="bubble">' + h(e.text) + '</div></div></div>';
-      const verb = e.kind === 'assign' ? 'حوّل البلاغ إلى ' + userName(e.to) : { open: log.indexOf(e) === 0 ? 'أبلغ عن العطل' : 'أعاد فتح البلاغ', in_progress: 'بدأ المعالجة', resolved: 'أغلق البلاغ' }[e.status];
-      return '<div class="ev sys"><div class="avatar">' + icon(e.kind === 'assign' ? 'users' : e.status === 'resolved' ? 'check' : e.status === 'open' ? 'alert' : 'refresh').replace('<svg', '<svg width="15" height="15"') + '</div><div style="min-width:0"><div class="hd"><b>' + h(u.name) + '</b><span>' + h(verb) + '</span>' + (e.kind === 'status' ? pill(TK_STATUS, e.status) : '') + '<time>' + U.timeAgo(e.at) + '</time></div>' + (e.text ? '<div class="bubble">' + h(e.text) + '</div>' : '') + '</div></div>';
-    }).join('') + '</div>' : '';
+    const fwdE = (t.log || []).filter((e) => e.kind === 'forward').pop();
+    const lvl = (n, title, who, state, cls) => '<div class="lvl ' + cls + '"><span class="lvl-n">' + n + '</span><div><span class="lbl">' + h(title) + '</span><b>' + h(who) + '</b><small>' + h(state) + '</small></div></div>';
+    const levels = '<div class="levels">' +
+      lvl(1, 'مشرف المعمل', userName(l.supervisorId), t.forwardedIT ? 'حوّل البلاغ' : t.status === 'resolved' ? 'تمت المعالجة' : 'يعالج البلاغ', t.forwardedIT || t.status === 'resolved' ? 'done' : 'cur') +
+      lvl(2, 'الدعم الفني', t.forwardedIT && fwdE ? userName(fwdE.to) : '—', t.forwardedIT ? (t.status === 'resolved' ? 'تمت المعالجة' : 'محوّل إليه') : 'لم يُحوّل', t.forwardedIT ? (t.status === 'resolved' ? 'done' : 'cur') : '') +
+      lvl(3, 'لجنة المعامل', ap ? APPROVAL_KIND[ap.kind] + (ap.cost ? ' · ' + fmtSAR(ap.cost) : '') : '—', ap ? AP_STATUS[ap.status][0] : 'لا يتطلب موافقة', ap ? (ap.status === 'pending' ? 'hold' : ap.status === 'approved' ? 'done' : 'stop') : '') +
+      '</div>';
+    let banner = '';
+    if (t.status === 'resolved' && t.resolution) banner = '<div class="alert rq-banner" style="background:var(--ok-soft);color:var(--ok)">' + icon('check') + '<div class="grow"><b>الإجراء المتخذ:</b> ' + h(t.resolution) + '</div></div>';
+    else if (approvalPending(t)) banner = '<div class="alert rq-banner">' + icon('flag') + '<div class="grow"><b>بانتظار لجنة المعامل:</b> ' + h(APPROVAL_KIND[ap.kind]) + (ap.cost ? ' بتكلفة تقديرية ' + fmtSAR(ap.cost) : '') + '. ' + h(ap.reason) + '</div></div>';
+    else if (ap && ap.status === 'rejected') banner = '<div class="alert bad rq-banner">' + icon('x') + '<div class="grow"><b>رفضت اللجنة الطلب:</b> ' + h(ap.note || '') + '</div></div>';
+    else if (t.priority === 'urgent' && t.status !== 'resolved') banner = '<div class="alert bad rq-banner">' + icon('alert') + '<div class="grow"><b>بلاغ عاجل</b>، مفتوح منذ ' + (days ? daysTxt(days) : 'اليوم') + '.</div></div>';
+    const allAtt = (t.attachments || []).concat(...(t.log || []).filter((e) => e.attachments && (!e.internal || can || canDecide())).map((e) => e.attachments));
 
-    const html = '<section class="card req-detail" style="max-width:980px">' +
+    const html = '<section class="card req-detail" style="max-width:1040px">' +
       '<a class="btn btn-sm" href="#maintenance" style="margin:14px 24px 0">' + icon('chevronR') + 'كل البلاغات</a>' +
-      '<div class="rq-head"><div class="top"><span class="tag">' + h(t.ref) + '</span>' + pill(TK_PRI, t.priority) + pill(TK_STATUS, t.status) + '</div><h2>' + h(t.title) + '</h2><div class="meta">أبلغ عنه ' + h(userName(t.reporterId)) + ' · ' + U.timeAgo(created) + ' · ' + h(l.name || '') + '</div></div>' +
-      '<div class="route-band" style="grid-template-columns:minmax(0,1fr)">' + (d ?
-        '<a class="dept-box" href="#dev-' + d.id + '" style="color:inherit;text-decoration:none"><div class="dcode" style="width:auto;padding:0 8px;font-size:11px">' + h(d.tag) + '</div><div><span class="lbl">الجهاز المعني · اضغط لعرض سجله</span><b>' + h(d.name) + '</b><div class="who">' + h(d.model || '') + ' · ' + h(l.name || '') + '</div></div><span style="margin-inline-start:auto">' + pill(DEV_STATUS, d.status) + '</span></a>'
-        : '<div class="dept-box"><div class="dcode">' + h((l.code || '').split('-')[0]) + '</div><div><span class="lbl">عطل عام في المعمل</span><b>' + h(l.name || '—') + '</b><div class="who">' + h((l.building || '') + ' · قاعة ' + (l.room || '')) + '</div></div></div>') + '</div>' +
-      stepper +
-      (t.status === 'resolved' && t.resolution ? '<div class="alert rq-banner" style="background:var(--ok-soft);color:var(--ok)">' + icon('check') + '<div class="grow"><b>الإجراء المتخذ:</b> ' + h(t.resolution) + '</div></div><div style="height:16px"></div>' : t.priority === 'urgent' && t.status !== 'resolved' ? '<div class="alert bad rq-banner">' + icon('alert') + '<div class="grow"><b>بلاغ عاجل</b>، مفتوح منذ ' + (days ? daysTxt(days) : 'اليوم') + '.</div></div><div style="height:16px"></div>' : '') +
+      '<div class="rq-head"><div class="top"><span class="tag">' + h(t.ref) + '</span><span class="type-chip">' + icon(ISSUE_TYPE[t.issueType || 'other'][1]) + h(ISSUE_TYPE[t.issueType || 'other'][0]) + '</span>' + pill(TK_PRI, t.priority) + pill(TK_STATUS, t.status) + (t.forwardedIT ? '<span class="pill info">محوّل للدعم الفني</span>' : '') + (ap ? pill(AP_STATUS, ap.status) : '') + '</div>' +
+      '<h2>' + h(t.title) + '</h2><div class="meta">أبلغ عنه ' + h(reporterName(t)) + ' · ' + U.timeAgo(created) + ' · ' + h(semName(t.semesterId)) + '</div></div>' +
+      '<div class="route-band" style="grid-template-columns:minmax(0,1fr);gap:12px">' + locPath(t) +
+      (devs.length ? '<div class="dev-chips">' + devs.map((d) => '<a class="dev-chip" href="#dev-' + d.id + '"><span class="dot ' + DEV_STATUS[d.status][1] + '"></span><b class="mono">' + h(d.tag) + '</b><span>' + h(d.name) + '</span></a>').join('') + '</div>' : '<div class="muted small">لم تُحدد أجهزة بعينها</div>') + '</div>' +
+      tkStepper(t) + levels +
+      (banner ? banner + '<div style="height:16px"></div>' : '') +
       '<div class="rq-actions"><span class="note">' + icon('info') + h(note) + '</span>' + b + '</div>' +
-      '<div class="rq-section"><h3>تفاصيل البلاغ</h3><div class="facts">' + fact('المعمل', '<a href="#lab-' + t.labId + '">' + h(l.name || '—') + '</a>') + fact('المبلّغ', h(userName(t.reporterId))) + fact('المسؤول', h(userName(t.assigneeId))) +
+      '<div class="rq-section"><h3>تفاصيل البلاغ</h3><div class="facts">' +
+      fact('المبلّغ', h(reporterName(t)) + (t.guest && (can || canDecide()) ? '<div class="muted small ltr" style="text-align:right">' + h(t.guest.email) + '</div>' : '')) + fact('المسؤول الآن', h(userName(t.assigneeId))) + fact('الفصل الدراسي', h(semName(t.semesterId))) +
       fact('تاريخ البلاغ', U.fmtDate(t.createdAt)) + fact(t.status === 'resolved' ? 'تاريخ الحل' : 'مفتوح منذ', t.status === 'resolved' ? U.fmtDate(t.resolvedAt) : (days ? daysTxt(days) : 'اليوم')) + fact('مدة المعالجة', t.status === 'resolved' ? (days ? daysTxt(days) : 'في نفس اليوم') : '—') + '</div></div>' +
       (t.description ? '<div class="rq-section"><h3>وصف العطل</h3><p class="rq-desc">' + h(t.description) + '</p></div>' : '') +
-      '<div class="rq-section"><h3>خطوات المعالجة والمراسلات</h3>' + thread + '</div>' +
-      '<form class="composer" id="tk-comment" data-id="' + t.id + '"><textarea class="textarea" name="text" id="tk-text" placeholder="اكتب تحديثًا أو استفسارًا…" aria-label="الرد"></textarea><button class="btn btn-primary" type="submit">' + icon('send') + 'إرسال</button></form>' +
+      (allAtt.length ? '<div class="rq-section"><h3>المرفقات (' + allAtt.length + ')</h3>' + attGallery(allAtt) + '</div>' : '') +
+      '<div class="rq-section"><h3>سجل التتبع والمراسلات</h3>' + ticketThread(t, 'staff') + '</div>' +
+      '<form class="composer composer-tk" id="tk-comment" data-id="' + t.id + '"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:8px"><textarea class="textarea" name="text" id="tk-text" placeholder="اكتب تحديثًا أو استفسارًا…" aria-label="الرد"></textarea>' +
+      '<div class="composer-opts">' + (can || canDecide() ? '<label class="chk"><input type="checkbox" id="tk-public" checked> مرئي للمبلّغ</label>' : '') + '<label class="btn btn-sm btn-ghost" for="tk-files" style="cursor:pointer">' + icon('upload') + 'إرفاق صورة</label><input type="file" id="tk-files" accept="image/*" multiple hidden><div class="att-preview" id="tk-preview"></div></div></div>' +
+      '<button class="btn btn-primary" type="submit">' + icon('send') + 'إرسال</button></form>' +
       '</section>';
     return {
-      title: t.ref + ' · ' + t.title, crumb: 'الصيانة والأعطال', html,
+      title: t.ref + ' · ' + t.title, crumb: 'البلاغات والأعطال', html,
       mount(root) {
         const form = root.querySelector('#tk-comment');
+        bindAttachments(root.querySelector('#tk-files'), root.querySelector('#tk-preview'), form, 3);
         form.addEventListener('submit', (e) => {
           e.preventDefault();
           const text = (form.querySelector('textarea').value || '').trim();
-          if (!text) return;
-          const cur0 = S.byId('tickets', t.id);
-          S.upsert('tickets', Object.assign({}, cur0, { log: (cur0.log || []).concat([{ at: nowISO(), userId: me.id, kind: 'comment', text }]) }));
-          U.toast('تم إرسال التحديث');
+          if (!text && !(form._att || []).length) return;
+          const pub = root.querySelector('#tk-public');
+          tkSave(t, {}, { kind: 'comment', text: text || 'أرفق صورًا', internal: pub ? !pub.checked : false, attachments: form._att || [] });
+          U.toast(pub && !pub.checked ? 'أُضيفت ملاحظة داخلية' : 'تم إرسال التحديث');
           render();
         });
+        root.addEventListener('click', (e) => { const b = e.target.closest('[data-lightbox]'); if (b) { const img = b.querySelector('img'); lightbox(img.src, img.alt); } });
       }
     };
   }
+
+  /* ===== موافقات لجنة المعامل ===== */
+  function viewApprovals() {
+    const all = S.coll('tickets').filter((t) => t.approval);
+    const pend = all.filter(approvalPending).sort((a, b) => a.approval.at.localeCompare(b.approval.at));
+    const done = all.filter((t) => !approvalPending(t)).sort((a, b) => (b.approval.decidedAt || '').localeCompare(a.approval.decidedAt || ''));
+    const sumPend = pend.reduce((s, t) => s + (t.approval.cost || 0), 0);
+    const sumOk = done.filter((t) => t.approval.status === 'approved').reduce((s, t) => s + (t.approval.cost || 0), 0);
+    const cards = pend.length ? '<div class="ap-list">' + pend.map((t) => {
+      const a = t.approval;
+      return '<article class="card ap-card"><div class="ap-top"><a class="tag" href="#tk-' + t.id + '">' + h(t.ref) + '</a><span class="pill warn">' + h(APPROVAL_KIND[a.kind]) + '</span><span class="muted small">' + h(labName(t.labId)) + '</span></div>' +
+        '<h3><a href="#tk-' + t.id + '">' + h(t.title) + '</a></h3><div class="ap-cost"><span>التكلفة التقديرية</span><b>' + (a.cost ? fmtSAR(a.cost) : 'بدون تكلفة') + '</b></div>' +
+        '<p class="small">' + h(a.reason) + '</p><div class="muted small">رفعه ' + h(userName(a.requestedBy)) + ' · ' + U.timeAgo(a.at) + '</div>' +
+        (canDecide() ? '<div class="ap-actions"><button class="btn btn-ok" data-act="tkAct" data-id="' + t.id + '|approve">' + icon('check') + 'اعتماد</button><button class="btn btn-danger" data-act="tkAct" data-id="' + t.id + '|decline">رفض</button><a class="btn btn-ghost" href="#tk-' + t.id + '">التفاصيل</a></div>' : '') + '</article>';
+    }).join('') + '</div>' : '<div class="card">' + emptyState('check', 'لا توجد طلبات بانتظار اللجنة') + '</div>';
+    const hist = done.length ? '<div class="table-wrap"><table class="table stack"><thead><tr><th>البلاغ</th><th>نوع الطلب</th><th>التكلفة</th><th>القرار</th><th class="hide-sm">بواسطة</th><th class="hide-sm">التاريخ</th></tr></thead><tbody>' +
+      done.map((t) => '<tr><td><a class="tag" href="#tk-' + t.id + '">' + h(t.ref) + '</a> <span class="small">' + h(t.title) + '</span></td><td>' + h(APPROVAL_KIND[t.approval.kind]) + '</td><td class="num">' + (t.approval.cost ? fmtSAR(t.approval.cost) : '—') + '</td><td>' + pill(AP_STATUS, t.approval.status) + '</td><td class="hide-sm">' + h(userName(t.approval.decidedBy)) + '</td><td class="hide-sm small">' + (t.approval.decidedAt ? fmtStamp(t.approval.decidedAt) : '—') + '</td></tr>').join('') + '</tbody></table></div>' : emptyState('clock', 'لم تُتخذ قرارات بعد');
+    return {
+      title: 'موافقات لجنة المعامل', crumb: 'البلاغات والطلبات',
+      html: '<div class="page-head"><div class="t"><h2>موافقات لجنة المعامل</h2><p>المستوى الثالث في معالجة البلاغات: الشراء والاستبدال وإخراج الأجهزة من الخدمة</p></div></div>' +
+        '<div class="grid grid-kpi">' + kpi('بانتظار القرار', pend.length, 'flag', 'warn', 'أقدمها منذ ' + (pend[0] ? U.timeAgo(pend[0].approval.at).replace('قبل ', '') : '—')) + kpi('قيمة الطلبات المعلقة', '<span style="font-size:1.4rem">' + fmtSAR(sumPend) + '</span>', 'box', 'info', 'تكلفة تقديرية') +
+        kpi('معتمدة', done.filter((t) => t.approval.status === 'approved').length, 'check', '', 'بقيمة ' + fmtSAR(sumOk)) + kpi('مرفوضة', done.filter((t) => t.approval.status === 'rejected').length, 'x', 'bad', 'مع ذكر السبب') + '</div>' +
+        cards + card('سجل القرارات', done.length + ' قرارًا', hist, '', true)
+    };
+  }
+
+  /* ===== الواجهة العامة: إبلاغ الزوار وتتبع البلاغ ===== */
+  const pub = { done: null, track: null, trackErr: '' };
+  function renderPublic(r) {
+    const nav = '<header class="pub-top"><a class="brand" href="#" style="text-decoration:none"><div class="brand-mark"><small>LM</small>Lb</div><div><div class="brand-name">مِختبَر</div><div class="brand-sub">نظام إدارة المعامل</div></div></a>' +
+      '<nav class="pub-nav"><a href="#report" class="' + (r === 'report' ? 'on' : '') + '">' + icon('wrench') + 'الإبلاغ عن عطل</a><a href="#track" class="' + (r === 'track' ? 'on' : '') + '">' + icon('search') + 'تتبع بلاغ</a><a href="#" class="btn btn-sm">' + icon('key') + 'تسجيل الدخول</a></nav></header>';
+    let body;
+    if (r === 'report' && pub.done) {
+      const t = pub.done;
+      body = '<div class="pub-card" style="text-align:center"><div class="pub-ok">' + icon('check') + '</div><h1>تم استلام بلاغك</h1><p class="muted">احتفظ برقم البلاغ لتتابع حالته. سيصل البلاغ إلى مشرف ' + h(labName(t.labId)) + '.</p>' +
+        '<div class="pub-ref ltr">' + h(t.ref) + '</div><p class="small muted">البريد المسجل: <span class="ltr">' + h(t.guest.email) + '</span></p>' +
+        '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap"><button class="btn btn-primary" id="pub-go-track">' + icon('search') + 'تتبع البلاغ</button><button class="btn" id="pub-new">بلاغ آخر</button></div></div>';
+    } else if (r === 'report') {
+      body = '<form class="pub-card" id="pub-report" novalidate><div class="pub-head">' + icon('flask') + '<h1>الإبلاغ عن عطل</h1><p class="muted">لا تحتاج حسابًا. اكتب بريدك لتتابع البلاغ لاحقًا.</p></div><div class="form-error" hidden></div>' + ticketFormHTML(true) + '<button type="submit" class="btn btn-primary btn-block" style="height:46px">' + icon('send') + 'إرسال البلاغ</button></form>';
+    } else {
+      const t = pub.track ? S.byId('tickets', pub.track) : null;
+      body = '<form class="pub-card" id="pub-track" novalidate><div class="pub-head">' + icon('search') + '<h1>تتبع حالة البلاغ</h1><p class="muted">أدخل رقم البلاغ والبريد الذي استخدمته عند الإبلاغ.</p></div>' +
+        (pub.trackErr ? '<div class="form-error">' + icon('alert') + '<span>' + h(pub.trackErr) + '</span></div>' : '') +
+        U.formGrid([{ name: 'ref', label: 'رقم البلاغ', required: true, ltr: true, placeholder: 'MT-1043' }, { name: 'email', label: 'البريد الإلكتروني', type: 'email', required: true, ltr: true }], { ref: t ? t.ref : '', email: t && t.guest ? t.guest.email : '' }) +
+        '<button type="submit" class="btn btn-primary btn-block">' + icon('search') + 'عرض الحالة</button></form>';
+      if (t) {
+        const l = lab(t.labId) || {};
+        body += '<section class="pub-card pub-wide"><div class="rq-head" style="padding:0 0 12px"><div class="top"><span class="tag">' + h(t.ref) + '</span>' + pill(TK_STATUS, t.status) + (approvalPending(t) ? '<span class="pill warn">بانتظار موافقة لجنة المعامل</span>' : '') + '</div><h2>' + h(t.title) + '</h2><div class="meta">' + h(l.name || '') + ' · ' + U.fmtDate(t.createdAt) + '</div></div>' +
+          locPath(t) + tkStepper(t) +
+          (t.status === 'resolved' && t.resolution ? '<div class="alert" style="background:var(--ok-soft);color:var(--ok)">' + icon('check') + '<div class="grow"><b>تم الحل:</b> ' + h(t.resolution) + '</div></div>' : '') +
+          '<h3 style="font-size:var(--fs-sm);margin:18px 0 12px">سجل التتبع</h3>' + ticketThread(t, 'public') +
+          (t.status !== 'resolved' ? '<form id="pub-comment" class="composer" style="padding:16px 0 0;border-top:1px solid var(--line);margin-top:16px"><textarea class="textarea" name="text" placeholder="أضف معلومة أو استفسارًا لفريق المعامل…" aria-label="رد"></textarea><button class="btn btn-primary" type="submit">' + icon('send') + 'إرسال</button></form>' : '') + '</section>';
+      }
+    }
+    document.getElementById('app').innerHTML = '<div class="pub">' + nav + '<main class="pub-main">' + body + '</main><footer class="pub-foot">مِختبَر · نظام إدارة المعامل</footer></div>';
+    const rep = document.getElementById('pub-report');
+    if (rep) {
+      bindTicketForm(rep, {});
+      rep.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const res = readTicketForm(rep, true);
+        const err = rep.querySelector('.form-error');
+        if (res.err) { err.innerHTML = icon('alert') + '<span>' + h(res.err) + '</span>'; err.hidden = false; err.scrollIntoView({ block: 'center' }); return; }
+        pub.done = createTicket(res.data);
+        renderPublic('report');
+        window.scrollTo(0, 0);
+      });
+    }
+    const gt = document.getElementById('pub-go-track');
+    if (gt) gt.addEventListener('click', () => { pub.track = pub.done.id; pub.trackErr = ''; pub.done = null; location.hash = 'track'; });
+    const nw = document.getElementById('pub-new');
+    if (nw) nw.addEventListener('click', () => { pub.done = null; renderPublic('report'); });
+    const tr = document.getElementById('pub-track');
+    if (tr) tr.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = U.formData(tr);
+      const t = S.coll('tickets').find((x) => x.ref.toLowerCase() === (v.ref || '').toLowerCase());
+      const email = (v.email || '').toLowerCase();
+      const ok = t && ((t.guest && t.guest.email === email) || (user(t.reporterId) || {}).email === email);
+      pub.track = ok ? t.id : null;
+      pub.trackErr = ok ? '' : 'لا يوجد بلاغ بهذا الرقم مسجل بهذا البريد. تأكد من الرقم والبريد.';
+      renderPublic('track');
+    });
+    const pc = document.getElementById('pub-comment');
+    if (pc) pc.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const text = (pc.querySelector('textarea').value || '').trim();
+      if (!text) return;
+      const t = S.byId('tickets', pub.track);
+      S.upsert('tickets', Object.assign({}, t, { log: (t.log || []).concat([{ at: nowISO(), userId: '', kind: 'comment', text, internal: false }]) }));
+      U.toast('أُرسلت رسالتك إلى فريق المعامل');
+      renderPublic('track');
+    });
+  }
+
+  /* ===== الحرم الجامعي ===== */
+  function viewCampuses() {
+    const cs = S.coll('campuses');
+    const html = '<div class="page-head"><div class="t"><h2>الحرم الجامعي</h2><p>' + cs.length + ' مواقع · ' + S.coll('labs').length + ' معامل · ' + S.coll('stations').length + ' محطة · ' + S.coll('devices').length + ' جهازًا</p></div><div class="actions">' + (isAdmin() ? '<button class="btn btn-primary" data-act="newCampus">' + icon('plus') + 'إضافة حرم</button>' : '') + '</div></div>' +
+      '<div class="grid grid-2e">' + cs.map((c) => {
+        const ls = S.coll('labs').filter((l) => l.campusId === c.id);
+        const ids = new Set(ls.map((l) => l.id));
+        const ds = S.coll('devices').filter((d) => ids.has(d.labId));
+        const st = S.coll('stations').filter((s) => ids.has(s.labId)).length;
+        const ot = S.coll('tickets').filter((t) => ids.has(t.labId) && t.status !== 'resolved').length;
+        const ok = ds.filter((d) => d.status === 'working').length, svc = ds.filter((d) => d.status !== 'retired').length;
+        return '<section class="card"><div class="card-head"><div style="display:flex;gap:12px;align-items:center"><div class="dcode">' + h(c.code) + '</div><div><h2>' + h(c.name) + '</h2><div class="sub">' + h([c.city, c.address].filter(Boolean).join(' · ')) + '</div></div></div>' +
+          (isAdmin() ? '<div class="actions"><button class="icon-btn" data-act="editCampus" data-id="' + c.id + '" aria-label="تعديل">' + icon('edit') + '</button>' + (!ls.length ? '<button class="icon-btn" data-act="deleteCampus" data-id="' + c.id + '" aria-label="حذف">' + icon('trash') + '</button>' : '') + '</div>' : '') + '</div>' +
+          '<div class="card-body"><div class="facts facts-4">' + '<div class="fact"><span>المعامل</span><b>' + ls.length + '</b></div><div class="fact"><span>المحطات</span><b>' + st + '</b></div><div class="fact"><span>الأجهزة العاملة</span><b>' + ok + ' / ' + svc + '</b></div><div class="fact"><span>بلاغات مفتوحة</span><b' + (ot ? ' style="color:var(--bad)"' : '') + '>' + ot + '</b></div></div></div>' +
+          '<div class="list">' + (ls.length ? ls.map((l) => '<a class="list-item" href="#lab-' + l.id + '" style="color:inherit;text-decoration:none">' + labElem(l, 40) + '<div class="grow"><b>' + h(l.name) + '</b><span>' + h(l.building) + ' · قاعة ' + h(l.room) + ' · ' + S.coll('stations').filter((s) => s.labId === l.id).length + ' محطات</span></div>' + pill(LAB_STATUS, l.status) + '</a>').join('') : emptyState('flask', 'لا توجد معامل في هذا الحرم')) + '</div></section>';
+      }).join('') + '</div>';
+    return { title: 'الحرم الجامعي', crumb: 'المعامل والمعدات', html };
+  }
+  function campusModal(existing) {
+    const fields = [{ name: 'name', label: 'اسم الحرم', required: true, span: true }, { name: 'code', label: 'الرمز', required: true, ltr: true, placeholder: 'MAIN' }, { name: 'city', label: 'المدينة' }, { name: 'address', label: 'العنوان', span: true }];
+    U.modal({
+      title: existing ? 'تعديل الحرم' : 'إضافة حرم', body: U.formGrid(fields, existing || {}), submitText: 'حفظ',
+      onSubmit(form) {
+        const v = U.formData(form);
+        if (!v.name || !v.code) return 'الاسم والرمز مطلوبان.';
+        v.code = v.code.toUpperCase();
+        if (S.coll('campuses').some((c) => c.code === v.code && (!existing || c.id !== existing.id))) return 'الرمز مستخدم لحرم آخر.';
+        if (existing) v.id = existing.id;
+        S.upsert('campuses', v, 'C'); U.toast('تم الحفظ'); setTimeout(render);
+      }
+    });
+  }
+
+  /* ===== محطات المعمل ===== */
+  function stationsMap(l) {
+    const sts = S.coll('stations').filter((s) => s.labId === l.id);
+    const can = managesLab(l.id);
+    const cards = sts.map((s) => {
+      const ds = S.coll('devices').filter((d) => d.stationId === s.id);
+      const live = ds.filter((d) => d.status !== 'retired');
+      const worst = live.some((d) => d.status === 'broken') ? 'bad' : live.some((d) => d.status === 'maintenance') ? 'warn' : live.length ? 'ok' : '';
+      const ot = S.coll('tickets').filter((t) => t.stationId === s.id && t.status !== 'resolved').length;
+      return '<div class="st-card ' + worst + '"><div class="st-head"><b>' + h(s.name) + '</b><span class="mono">' + h(s.code.split('-').pop()) + '</span></div>' +
+        (ds.length ? '<div class="st-devs">' + ds.map((d) => '<a href="#dev-' + d.id + '" class="st-dev" title="' + h(d.name + ' · ' + DEV_STATUS[d.status][0]) + '"><span class="dot ' + DEV_STATUS[d.status][1] + '"></span>' + h(d.tag.split('-').slice(-2).join('-')) + '</a>').join('') + '</div>' : '<div class="muted small">لا توجد أجهزة</div>') +
+        '<div class="st-foot"><span>' + live.length + ' في الخدمة' + (ot ? ' · <b style="color:var(--bad)">' + ot + ' بلاغ</b>' : '') + '</span>' +
+        '<span style="display:flex;gap:2px"><button class="icon-btn" data-act="reportStation" data-id="' + s.id + '" title="إبلاغ عن عطل في المحطة" aria-label="إبلاغ عن عطل">' + icon('wrench') + '</button>' + (can ? '<button class="icon-btn" data-act="editStation" data-id="' + s.id + '" title="تعديل المحطة" aria-label="تعديل المحطة">' + icon('edit') + '</button>' : '') + '</span></div></div>';
+    }).join('');
+    return '<div class="st-legend small muted"><span><i class="dot ok"></i>كل الأجهزة تعمل</span><span><i class="dot warn"></i>جهاز في الصيانة</span><span><i class="dot bad"></i>جهاز معطّل</span></div>' +
+      '<div class="st-map">' + (cards || '') + (can ? '<button class="st-add" data-act="newStation" data-id="' + l.id + '">' + icon('plus') + 'إضافة محطة</button>' : '') + '</div>' + (!sts.length && !can ? emptyState('grid', 'لا توجد محطات مسجلة في هذا المعمل') : '');
+  }
+  function stationModal(existing, labId) {
+    const l = lab(existing ? existing.labId : labId);
+    const n = S.coll('stations').filter((s) => s.labId === l.id).length;
+    const v = existing || { name: 'محطة ' + n, code: l.code + '-S' + pad(n) };
+    const nDev = existing ? S.coll('devices').filter((d) => d.stationId === existing.id).length : 0;
+    U.modal({
+      title: (existing ? 'تعديل المحطة · ' : 'إضافة محطة · ') + l.name, size: 'sm',
+      body: U.formGrid([{ name: 'name', label: 'اسم المحطة', required: true, span: true }, { name: 'code', label: 'الرمز', required: true, ltr: true, span: true }, { name: 'note', label: 'ملاحظات', type: 'textarea', span: true, placeholder: 'مثال: بجانب النافذة، فيها منفذ شبكة إضافي' }], v),
+      submitText: 'حفظ',
+      extraFoot: existing && !nDev ? '<button class="btn btn-danger" data-act="deleteStation" data-id="' + existing.id + '">' + icon('trash') + 'حذف</button>' : '',
+      onSubmit(form) {
+        const d = U.formData(form);
+        if (!d.name || !d.code) return 'الاسم والرمز مطلوبان.';
+        d.code = d.code.toUpperCase();
+        if (S.coll('stations').some((s) => s.code === d.code && (!existing || s.id !== existing.id))) return 'الرمز ' + d.code + ' مستخدم لمحطة أخرى.';
+        d.labId = l.id; if (existing) d.id = existing.id;
+        S.upsert('stations', d, 'st'); S.log(me.id, (existing ? 'عدّل المحطة ' : 'أضاف المحطة ') + d.code); U.toast('تم الحفظ'); setTimeout(render);
+      }
+    });
+  }
+
+  /* ===== البيانات المرجعية: أنواع الأجهزة والفصول الدراسية ===== */
+  function viewReference() {
+    const types = S.coll('deviceTypes'), sems = S.coll('semesters').slice().sort((a, b) => a.start.localeCompare(b.start));
+    const cur = currentSemester();
+    const tTable = '<div class="table-wrap"><table class="table stack"><thead><tr><th>النوع</th><th>يتطلب معايرة</th><th>عدد الأجهزة</th><th></th></tr></thead><tbody>' + types.map((t) => {
+      const n = S.coll('devices').filter((d) => d.type === t.id).length;
+      return '<tr><td class="cell-main">' + h(t.name) + '</td><td>' + (t.calibration ? '<span class="pill warn">نعم</span>' : '<span class="muted small">لا</span>') + '</td><td class="num">' + n + '</td><td><div class="row-actions"><button class="icon-btn" data-act="editType" data-id="' + t.id + '" aria-label="تعديل">' + icon('edit') + '</button>' + (!n ? '<button class="icon-btn" data-act="deleteType" data-id="' + t.id + '" aria-label="حذف">' + icon('trash') + '</button>' : '') + '</div></td></tr>';
+    }).join('') + '</tbody></table></div>';
+    const sTable = '<div class="table-wrap"><table class="table stack"><thead><tr><th>الفصل</th><th>البداية</th><th>النهاية</th><th>الحالة</th><th>البلاغات</th><th></th></tr></thead><tbody>' + sems.map((s) => {
+      const n = S.coll('tickets').filter((t) => t.semesterId === s.id).length;
+      const state = s.id === cur.id ? '<span class="pill ok">الحالي</span>' : s.end < today() ? '<span class="pill">منتهٍ</span>' : '<span class="pill info">قادم</span>';
+      return '<tr><td class="cell-main">' + h(s.name) + '</td><td>' + U.fmtDate(s.start) + '</td><td>' + U.fmtDate(s.end) + '</td><td>' + state + '</td><td class="num">' + n + '</td><td><div class="row-actions"><button class="icon-btn" data-act="editSem" data-id="' + s.id + '" aria-label="تعديل">' + icon('edit') + '</button>' + (!n ? '<button class="icon-btn" data-act="deleteSem" data-id="' + s.id + '" aria-label="حذف">' + icon('trash') + '</button>' : '') + '</div></td></tr>';
+    }).join('') + '</tbody></table></div>';
+    return {
+      title: 'البيانات المرجعية', crumb: 'الإعدادات',
+      html: '<div class="page-head"><div class="t"><h2>البيانات المرجعية</h2><p>القوائم التي تعتمد عليها بقية الشاشات</p></div></div>' +
+        '<div class="grid grid-2e">' + card('أنواع الأجهزة', types.length + ' أنواع', tTable, '<button class="btn btn-sm" data-act="newType">' + icon('plus') + 'إضافة نوع</button>', true) +
+        card('الفصول الدراسية', 'الحالي: ' + cur.name, sTable, '<button class="btn btn-sm" data-act="newSem">' + icon('plus') + 'إضافة فصل</button>', true) + '</div>'
+    };
+  }
+  function typeModal(existing) {
+    U.modal({
+      title: existing ? 'تعديل نوع الجهاز' : 'إضافة نوع جهاز', size: 'sm',
+      body: U.formGrid([{ name: 'name', label: 'اسم النوع', required: true, span: true, placeholder: 'مثال: طابعة' }, { name: 'calibration', label: 'يتطلب معايرة دورية', type: 'select', span: true, options: [{ value: '0', label: 'لا' }, { value: '1', label: 'نعم' }] }], existing ? { name: existing.name, calibration: existing.calibration ? '1' : '0' } : { calibration: '0' }),
+      submitText: 'حفظ',
+      onSubmit(form) {
+        const v = U.formData(form);
+        if (!v.name) return 'اسم النوع مطلوب.';
+        if (S.coll('deviceTypes').some((t) => t.name === v.name && (!existing || t.id !== existing.id))) return 'يوجد نوع بنفس الاسم.';
+        S.upsert('deviceTypes', { id: existing ? existing.id : undefined, name: v.name, calibration: v.calibration === '1' }, 'dt'); U.toast('تم الحفظ'); setTimeout(render);
+      }
+    });
+  }
+  function semModal(existing) {
+    U.modal({
+      title: existing ? 'تعديل الفصل الدراسي' : 'إضافة فصل دراسي', size: 'sm',
+      body: U.formGrid([{ name: 'name', label: 'اسم الفصل', required: true, span: true, placeholder: 'الفصل الثاني 2026–2027' }, { name: 'start', label: 'البداية', type: 'date', required: true }, { name: 'end', label: 'النهاية', type: 'date', required: true }], existing || {}),
+      submitText: 'حفظ',
+      onSubmit(form) {
+        const v = U.formData(form);
+        if (!v.name || !v.start || !v.end) return 'كل الحقول مطلوبة.';
+        if (v.end <= v.start) return 'نهاية الفصل يجب أن تكون بعد بدايته.';
+        const clash = S.coll('semesters').find((s) => (!existing || s.id !== existing.id) && s.start <= v.end && v.start <= s.end);
+        if (clash) return 'يتداخل مع ' + clash.name + '.';
+        if (existing) v.id = existing.id;
+        S.upsert('semesters', v, 'S'); U.toast('تم الحفظ'); setTimeout(render);
+      }
+    });
+  }
+  const barcodeSVG = (code) => {
+    let x = 0, bars = '';
+    String(code || '').split('').forEach((ch, i) => { const n = (+ch || 0) + i; const w1 = 1 + (n % 3), g = 1 + ((n * 7) % 2), w2 = 1 + ((n * 3) % 2); bars += '<rect x="' + x + '" y="0" width="' + w1 + '" height="26"/>'; x += w1 + g; bars += '<rect x="' + x + '" y="0" width="' + w2 + '" height="26"/>'; x += w2 + 2; });
+    return '<svg class="barcode-svg" viewBox="0 0 ' + x + ' 26" preserveAspectRatio="none" aria-hidden="true">' + bars + '</svg>';
+  };
 
   /* ===== الجدول الأسبوعي ===== */
   const H0 = 8, H1 = 20, HH = 52;
@@ -1030,13 +1501,16 @@
   /* ===== الصيانة ===== */
   function ticketsTable(items, compact) {
     if (!items.length) return emptyState('wrench', 'لا توجد بلاغات في هذا القسم');
-    return '<div class="table-wrap"><table class="table stack"><thead><tr><th>الرقم</th><th>البلاغ</th>' + (compact ? '' : '<th>المعمل</th>') + '<th>الأولوية</th><th>الحالة</th><th class="hide-sm">المبلّغ</th><th class="hide-sm">التاريخ</th><th></th></tr></thead><tbody>' +
+    return '<div class="table-wrap"><table class="table stack"><thead><tr><th>الرقم</th><th>البلاغ</th>' + (compact ? '' : '<th>الموقع</th>') + '<th>النوع</th><th>الأولوية</th><th>الحالة</th><th class="hide-sm">المبلّغ</th><th class="hide-sm">التاريخ</th><th></th></tr></thead><tbody>' +
       items.map((t) => {
-        const d = dev(t.deviceId);
-        return '<tr><td><a class="tag" href="#tk-' + t.id + '">' + h(t.ref) + '</a></td><td><div class="cell-main"><a href="#tk-' + t.id + '" style="color:inherit;text-decoration:none">' + h(t.title) + '</a></div><div class="cell-sub">' + (d ? h(d.tag) + ' · ' + h(d.name) : 'عطل عام في المعمل') + '</div></td>' +
-          (compact ? '' : '<td>' + h(labName(t.labId)) + '</td>') +
-          '<td>' + pill(TK_PRI, t.priority) + '</td><td>' + pill(TK_STATUS, t.status) + '</td>' +
-          '<td class="hide-sm">' + h(userName(t.reporterId)) + '</td><td class="hide-sm small" style="white-space:nowrap">' + U.fmtDate(t.createdAt) + '</td>' +
+        const ds = tkDevices(t), s0 = station(t.stationId);
+        const where = ds.length ? h(ds[0].tag) + (ds.length > 1 ? ' +' + (ds.length - 1) : '') : s0 ? h(s0.name) : 'المعمل كاملًا';
+        const it = ISSUE_TYPE[t.issueType || 'other'] || ISSUE_TYPE.other;
+        return '<tr><td><a class="tag" href="#tk-' + t.id + '">' + h(t.ref) + '</a></td><td><div class="cell-main"><a href="#tk-' + t.id + '" style="color:inherit;text-decoration:none">' + h(t.title) + '</a></div><div class="cell-sub">' + where + '</div></td>' +
+          (compact ? '' : '<td>' + h(labName(t.labId)) + '<div class="cell-sub">' + h(s0 ? s0.name : campusName((lab(t.labId) || {}).campusId)) + '</div></td>') +
+          '<td class="small">' + h(it[0]) + '</td><td>' + pill(TK_PRI, t.priority) + '</td>' +
+          '<td><div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">' + pill(TK_STATUS, t.status) + (approvalPending(t) ? '<span class="pill warn">بانتظار اللجنة</span>' : t.forwardedIT && t.status !== 'resolved' ? '<span class="pill info">الدعم الفني</span>' : '') + '</div></td>' +
+          '<td class="hide-sm">' + h(reporterName(t)) + '</td><td class="hide-sm small" style="white-space:nowrap">' + U.fmtDate(t.createdAt) + '</td>' +
           '<td><div class="row-actions"><button class="icon-btn" data-act="viewTicket" data-id="' + t.id + '" title="التفاصيل" aria-label="التفاصيل">' + icon('eye') + '</button>' +
           (isAdmin() ? '<button class="icon-btn" data-act="deleteTicket" data-id="' + t.id + '" title="حذف" aria-label="حذف">' + icon('trash') + '</button>' : '') + '</div></td></tr>';
       }).join('') + '</tbody></table></div>';
@@ -1044,79 +1518,52 @@
 
   function viewMaintenance() {
     const f = st.tickets;
-    const scope = () => S.coll('tickets').filter((t) => isStaff() ? (isAdmin() || managesLab(t.labId) || t.reporterId === me.id) : t.reporterId === me.id);
-    const tabs = [['active', 'المفتوحة', (t) => t.status !== 'resolved'], ['open', 'جديدة', (t) => t.status === 'open'], ['in_progress', 'قيد المعالجة', (t) => t.status === 'in_progress'], ['resolved', 'تم حلها', (t) => t.status === 'resolved'], ['all', 'الكل', () => true]];
+    const scope = () => S.coll('tickets').filter(canSeeTicket);
+    const tabs = [
+      ['active', 'المفتوحة', (t) => t.status !== 'resolved'], ['open', 'جديدة', (t) => t.status === 'open'], ['in_progress', 'قيد المعالجة', (t) => t.status === 'in_progress'],
+      ['it', 'محوّلة للدعم الفني', (t) => !!t.forwardedIT && t.status !== 'resolved'], ['approval', 'بانتظار اللجنة', approvalPending],
+      ['guest', 'من الزوار', (t) => !!t.guest], ['resolved', 'تم حلها', (t) => t.status === 'resolved'], ['all', 'الكل', () => true]
+    ];
     const all = scope();
     const open = all.filter((t) => t.status !== 'resolved');
+    const sem = currentSemester();
     const res = all.filter((t) => t.status === 'resolved' && t.resolvedAt);
     const avg = res.length ? (res.reduce((s, t) => s + (U.parseDate(t.resolvedAt) - U.parseDate(t.createdAt)) / 864e5, 0) / res.length) : 0;
+    const sel = (id, label, opts, val) => '<select class="select" id="' + id + '" aria-label="' + label + '"><option value="">' + label + '</option>' + opts.map((o) => '<option value="' + h(o.value) + '"' + (val === o.value ? ' selected' : '') + '>' + h(o.label) + '</option>').join('') + '</select>';
     const html =
-      '<div class="page-head"><div class="t"><h2>الصيانة والأعطال</h2><p>' + (isStaff() ? 'بلاغات المعامل وسير معالجتها' : 'البلاغات التي أرسلتها') + '</p></div><div class="actions">' +
+      '<div class="page-head"><div class="t"><h2>البلاغات والأعطال</h2><p>' + (isStaff() || me.role === 'it' || me.role === 'committee' ? 'بلاغات المعامل وسير معالجتها · ' + h(sem.name) : 'البلاغات التي أرسلتها') + '</p></div><div class="actions">' +
       (isStaff() ? '<button class="btn" data-act="exportTickets">' + icon('download') + 'تصدير CSV</button>' : '') +
       '<button class="btn btn-primary" data-act="newTicket">' + icon('plus') + 'بلاغ جديد</button></div></div>' +
       '<div class="grid grid-kpi">' +
       kpi('بلاغات مفتوحة', open.length, 'inbox', 'bad', open.filter((t) => t.status === 'open').length + ' لم تبدأ معالجتها') +
-      kpi('عاجلة أو عالية', open.filter((t) => t.priority === 'urgent' || t.priority === 'high').length, 'alert', 'warn', 'تتطلب استجابة خلال 24 ساعة') +
-      kpi('تم حلها', res.length, 'check', '', 'منذ بداية الفصل') +
-      kpi('متوسط مدة الحل', (Math.round(avg * 10) / 10) + '<span class="muted" style="font-size:1rem"> يوم</span>', 'clock', 'info', 'من فتح البلاغ حتى إغلاقه') +
+      kpi('عند الدعم الفني', open.filter((t) => t.forwardedIT).length, 'send', 'info', 'المستوى الثاني') +
+      kpi('بانتظار اللجنة', all.filter(approvalPending).length, 'flag', 'warn', 'المستوى الثالث') +
+      kpi('متوسط مدة الحل', (Math.round(avg * 10) / 10) + '<span class="muted" style="font-size:1rem"> يوم</span>', 'clock', '', res.length + ' بلاغًا تم حله') +
       '</div>' +
       '<section class="card"><div class="tabs" role="tablist" id="tk-tabs"></div>' +
-      '<div class="toolbar"><div class="search">' + icon('search') + '<input class="input" id="tk-q" type="search" placeholder="ابحث برقم البلاغ أو العنوان أو رقم الأصل" value="' + h(f.q) + '"></div></div>' +
-      '<div id="tk-list"></div></section>';
+      '<div class="toolbar"><div class="search">' + icon('search') + '<input class="input" id="tk-q" type="search" placeholder="ابحث برقم البلاغ أو العنوان أو رقم الأصل أو البريد" value="' + h(f.q) + '"></div>' +
+      sel('tk-campus', 'كل المواقع', S.coll('campuses').map((c) => ({ value: c.id, label: c.name })), f.campus) +
+      sel('tk-type', 'كل الأنواع', optsOf(ISSUE_TYPE), f.type) +
+      sel('tk-sem', 'كل الفصول', S.coll('semesters').map((x) => ({ value: x.id, label: x.name })), f.sem) +
+      '</div><div id="tk-list"></div></section>';
     return {
-      title: 'الصيانة والأعطال', crumb: 'التشغيل', html,
+      title: 'البلاغات والأعطال', crumb: 'البلاغات والطلبات', html,
       mount(root) {
         const tabsEl = root.querySelector('#tk-tabs'), list = root.querySelector('#tk-list');
         const draw = () => {
-          const items0 = scope();
           const q = f.q.toLowerCase();
-          tabsEl.innerHTML = tabs.map((x) => '<button role="tab" data-t="' + x[0] + '" class="' + (f.tab === x[0] ? 'on' : '') + '">' + x[1] + '<span class="count">' + items0.filter(x[2]).length + '</span></button>').join('');
-          const fn = tabs.find((x) => x[0] === f.tab)[2];
-          const items = items0.filter(fn).filter((t) => !q || (t.ref + ' ' + t.title + ' ' + ((dev(t.deviceId) || {}).tag || '')).toLowerCase().includes(q))
+          const items0 = scope().filter((t) => (!f.campus || (lab(t.labId) || {}).campusId === f.campus) && (!f.type || t.issueType === f.type) && (!f.sem || t.semesterId === f.sem));
+          tabsEl.innerHTML = tabs.map((x) => { const n = items0.filter(x[2]).length; return (x[0] === 'it' || x[0] === 'approval' || x[0] === 'guest') && !n && f.tab !== x[0] ? '' : '<button role="tab" data-t="' + x[0] + '" class="' + (f.tab === x[0] ? 'on' : '') + '">' + x[1] + '<span class="count">' + n + '</span></button>'; }).join('');
+          const fn = (tabs.find((x) => x[0] === f.tab) || tabs[0])[2];
+          const items = items0.filter(fn).filter((t) => !q || (t.ref + ' ' + t.title + ' ' + tkDevices(t).map((d) => d.tag).join(' ') + ' ' + (t.guest ? t.guest.email : '')).toLowerCase().includes(q))
             .sort((a, b) => (a.status === 'resolved') - (b.status === 'resolved') || PRI_ORDER[a.priority] - PRI_ORDER[b.priority] || b.createdAt.localeCompare(a.createdAt));
           list.innerHTML = ticketsTable(items);
         };
         tabsEl.addEventListener('click', (e) => { const b = e.target.closest('[data-t]'); if (b) { f.tab = b.dataset.t; draw(); } });
-        bindFilters(root, { '#tk-q': ['q', f] }, draw);
+        bindFilters(root, { '#tk-q': ['q', f], '#tk-campus': ['campus', f], '#tk-type': ['type', f], '#tk-sem': ['sem', f] }, draw);
         draw();
       }
     };
-  }
-
-  function ticketModal(pre) {
-    pre = pre || {};
-    const labsOpt = S.coll('labs').map((l) => ({ value: l.id, label: l.name }));
-    const v = { labId: pre.labId || '', deviceId: pre.deviceId || '', priority: 'medium' };
-    const devOpts = (labId) => '<option value="">بدون جهاز محدد (عطل عام في المعمل)</option>' + S.coll('devices').filter((d) => d.labId === labId && d.status !== 'retired').map((d) => '<option value="' + d.id + '"' + (d.id === v.deviceId ? ' selected' : '') + '>' + h(d.tag + ' · ' + d.name) + '</option>').join('');
-    const fields = [
-      { name: 'labId', label: 'المعمل', type: 'select', options: labsOpt, required: true, placeholder: 'اختر المعمل' },
-      { name: 'priority', label: 'الأولوية', type: 'select', options: optsOf(TK_PRI), required: true },
-      { name: 'deviceId', label: 'الجهاز', type: 'select', options: [], span: true },
-      { name: 'title', label: 'وصف مختصر للعطل', required: true, span: true, placeholder: 'مثال: الشاشة لا تعرض صورة' },
-      { name: 'description', label: 'التفاصيل', type: 'textarea', span: true, placeholder: 'متى بدأ العطل؟ ما الذي جربته؟' }
-    ];
-    U.modal({
-      title: 'بلاغ عطل جديد', body: U.formGrid(fields, v) + '<p class="muted small">يصل البلاغ إلى مشرف المعمل مباشرة، ويتحول الجهاز إلى «في الصيانة» حتى يُحل.</p>', submitText: 'إرسال البلاغ',
-      onOpen(form) {
-        const labSel = form.querySelector('#f-labId'), devSel = form.querySelector('#f-deviceId');
-        const fill = () => { devSel.innerHTML = devOpts(labSel.value); devSel.disabled = !labSel.value; };
-        labSel.addEventListener('change', () => { v.deviceId = ''; fill(); });
-        fill();
-      },
-      onSubmit(form) {
-        const d = U.formData(form);
-        if (!d.labId) return 'اختر المعمل.';
-        if (!d.title) return 'اكتب وصفًا مختصرًا للعطل.';
-        const l = lab(d.labId);
-        const tk = { ref: S.nextTicketRef(), labId: d.labId, deviceId: d.deviceId || '', title: d.title, description: d.description || '', priority: d.priority, status: 'open', reporterId: me.id, assigneeId: l.supervisorId, createdAt: today(), resolvedAt: '', log: [{ at: nowISO(), userId: me.id, kind: 'status', status: 'open', text: '' }] };
-        const saved = S.upsert('tickets', tk, 'tk');
-        const dv = dev(tk.deviceId);
-        if (dv && dv.status === 'working') setDevStatus(dv.id, tk.priority === 'urgent' ? 'broken' : 'maintenance', 'بسبب البلاغ ' + tk.ref);
-        S.log(me.id, 'فتح بلاغ صيانة ' + tk.ref + ' «' + tk.title + '»');
-        U.toast('تم إرسال البلاغ ' + tk.ref + ' إلى ' + userName(l.supervisorId));
-        setTimeout(() => go('tk-' + saved.id));
-      }
-    });
   }
 
   /* ===== التقارير ===== */
@@ -1127,10 +1574,11 @@
     if (f.period === 'week') { from = iso(weekStart(t)); to = iso(addDays(weekStart(t), 6)); }
     else if (f.period === 'month') { from = iso(new Date(t.getFullYear(), t.getMonth(), 1)); to = iso(new Date(t.getFullYear(), t.getMonth() + 1, 0)); }
     else if (f.period === '30') { from = iso(addDays(t, -29)); to = iso(t); }
+    else if (f.period === 'sem') { const sm = currentSemester(); from = sm.start || iso(t); to = sm.end || iso(t); }
     else { const ds = S.coll('bookings').map((b) => b.date).sort(); from = ds[0] || iso(t); to = ds[ds.length - 1] || iso(t); }
     const workdays = [];
     for (let d = U.parseDate(from); iso(d) <= to; d = addDays(d, 1)) if (d.getDay() <= 4) workdays.push(iso(d));
-    const labs = S.coll('labs').filter((l) => isAdmin() || managesLab(l.id));
+    const labs = S.coll('labs').filter((l) => isAdmin() || me.role === 'committee' || managesLab(l.id));
     const labIds = new Set(labs.map((l) => l.id));
     const inRange = S.coll('bookings').filter((b) => labIds.has(b.labId) && b.date >= from && b.date <= to);
     const approved = inRange.filter((b) => b.status === 'approved');
@@ -1156,7 +1604,7 @@
 
     const pri = Object.keys(TK_PRI).map((k) => ({ k, n: tks.filter((x) => x.priority === k).length }));
     const maxPri = Math.max(1, ...pri.map((x) => x.n));
-    const periods = [['week', 'هذا الأسبوع'], ['month', 'هذا الشهر'], ['30', 'آخر 30 يومًا'], ['all', 'كل الفترات']];
+    const periods = [['week', 'هذا الأسبوع'], ['month', 'هذا الشهر'], ['sem', 'الفصل الحالي'], ['all', 'كل الفترات']];
 
     const html =
       '<div class="page-head"><div class="t"><h2>التقارير والإحصاءات</h2><p>' + U.fmtDate(from) + ' – ' + U.fmtDate(to) + ' · ' + workdays.length + ' يوم عمل' + (isAdmin() ? '' : ' · المعامل التي تشرف عليها') + '</p></div><div class="actions">' +
@@ -1173,13 +1621,30 @@
       card('بلاغات الصيانة حسب الأولوية', tks.length + ' بلاغًا في الفترة', '<div class="bars">' + pri.map((x) => '<div class="meter-row" style="grid-template-columns:90px minmax(0,1fr) 36px"><span>' + pill(TK_PRI, x.k) + '</span><div class="meter ' + (x.k === 'urgent' ? 'bad' : x.k === 'high' ? 'warn' : '') + '"><span style="width:' + Math.round(x.n / maxPri * 100) + '%"></span></div><span class="pct">' + x.n + '</span></div>').join('') + '</div>' +
         '<div class="muted small" style="margin-top:16px">' + tks.filter((x) => x.status === 'resolved').length + ' تم حلها · ' + tks.filter((x) => x.status !== 'resolved').length + ' مفتوحة</div>') +
       '</div>' +
-      card('أداء المعامل', 'الإشغال = الساعات المحجوزة ÷ ساعات الدوام · الامتلاء = متوسط الحضور ÷ السعة', '<div class="table-wrap"><table class="table"><thead><tr><th>المعمل</th><th>الحجوزات</th><th>الساعات</th><th>الإشغال</th><th>الامتلاء</th><th>البلاغات</th></tr></thead><tbody>' + rows + '</tbody></table></div>', '', true) + reqReport(from, to);
+      card('أداء المعامل', 'الإشغال = الساعات المحجوزة ÷ ساعات الدوام · الامتلاء = متوسط الحضور ÷ السعة', '<div class="table-wrap"><table class="table"><thead><tr><th>المعمل</th><th>الحجوزات</th><th>الساعات</th><th>الإشغال</th><th>الامتلاء</th><th>البلاغات</th></tr></thead><tbody>' + rows + '</tbody></table></div>', '', true) + issuesReport(from, to, labs) + reqReport(from, to);
     return {
       title: 'التقارير', crumb: 'الإدارة', html,
       mount(root) { root.querySelector('#rp-period').addEventListener('click', (e) => { const b = e.target.closest('[data-p]'); if (b) { f.period = b.dataset.p; render(); } }); }
     };
   }
 
+  function issuesReport(from, to, labs) {
+    const ids = new Set(labs.map((l) => l.id));
+    const tks = S.coll('tickets').filter((t) => ids.has(t.labId) && t.createdAt >= from && t.createdAt <= to);
+    const types = Object.keys(ISSUE_TYPE).map((k) => ({ k, n: tks.filter((t) => (t.issueType || 'other') === k).length }));
+    const maxT = Math.max(1, ...types.map((x) => x.n));
+    const rows = S.coll('campuses').map((c) => {
+      const cl = labs.filter((l) => l.campusId === c.id), cids = new Set(cl.map((l) => l.id));
+      const ct = tks.filter((t) => cids.has(t.labId)), done = ct.filter((t) => t.status === 'resolved' && t.resolvedAt);
+      const avg = done.length ? done.reduce((s0, t) => s0 + (U.parseDate(t.resolvedAt) - U.parseDate(t.createdAt)) / 864e5, 0) / done.length : null;
+      const ds = S.coll('devices').filter((d) => cids.has(d.labId) && d.status !== 'retired');
+      return '<tr><td><span class="tag">' + h(c.code) + '</span> <span class="cell-main">' + h(c.name) + '</span></td><td class="num">' + cl.length + '</td><td class="num">' + (ds.length ? Math.round(ds.filter((d) => d.status === 'working').length / ds.length * 100) : 0) + '%</td><td class="num">' + ct.length + '</td><td class="num">' + ct.filter((t) => t.forwardedIT).length + '</td><td class="num">' + ct.filter((t) => t.approval).length + '</td><td class="num">' + (avg === null ? '—' : (Math.round(avg * 10) / 10) + ' يوم') + '</td></tr>';
+    }).join('');
+    return '<div class="grid grid-2">' +
+      card('البلاغات حسب الحرم', 'الجاهزية = الأجهزة العاملة ÷ الأجهزة في الخدمة', '<div class="table-wrap"><table class="table"><thead><tr><th>الحرم</th><th>المعامل</th><th>الجاهزية</th><th>البلاغات</th><th>للدعم الفني</th><th>للجنة</th><th>متوسط الحل</th></tr></thead><tbody>' + rows + '</tbody></table></div>', '', true) +
+      card('البلاغات حسب نوع العطل', tks.length + ' بلاغًا في الفترة', '<div class="bars">' + types.map((x) => '<div class="meter-row" style="grid-template-columns:120px minmax(0,1fr) 36px"><span class="name">' + h(ISSUE_TYPE[x.k][0]) + '</span><div class="meter"><span style="width:' + Math.round(x.n / maxT * 100) + '%"></span></div><span class="pct">' + x.n + '</span></div>').join('') + '</div>') +
+      '</div>';
+  }
   function reqReport(from, to) {
     const depts = S.coll('departments').filter((d) => isAdmin() || d.name === me.dept);
     if (!depts.length) return '';
@@ -1254,8 +1719,11 @@
       '<select class="select" id="us-role" aria-label="الدور"><option value="">كل الأدوار</option>' + optsOf(ROLE).map((o) => '<option value="' + o.value + '"' + (f.role === o.value ? ' selected' : '') + '>' + o.label + '</option>').join('') + '</select></div>' +
       '<div id="us-list"></div></section>' +
       departmentsCard() +
-      card('مصفوفة الصلاحيات', '', '<div class="table-wrap"><table class="table"><thead><tr><th>الصلاحية</th><th>مدير النظام</th><th>مشرف معمل</th><th>عضو هيئة تدريس</th><th>طالب</th></tr></thead><tbody>' +
-        [['عرض المعامل والجدول', 1, 1, 1, 1], ['طلب حجز معمل', 1, 1, 1, 1], ['تأكيد الحجز مباشرة', 1, 'معامله', 0, 0], ['الموافقة على الطلبات', 1, 'معامله', 0, 0], ['إدارة الأجهزة', 1, 'معامله', 0, 0], ['الإبلاغ عن عطل', 1, 1, 1, 1], ['معالجة البلاغات', 1, 'معامله', 0, 0], ['التقارير', 1, 'معامله', 0, 0], ['إضافة وحذف المعامل', 1, 0, 0, 0], ['الطلبات بين الأقسام: الإرسال', 1, 1, 1, 0], ['الطلبات بين الأقسام: البت في الوارد', 1, 'قسمه', 'رئيس القسم', 0], ['إدارة المستخدمين', 1, 0, 0, 0]]
+      card('مصفوفة الصلاحيات', 'ستة أدوار كما في مشروع التخرج، والزائر يبلّغ ويتتبع بدون حساب', '<div class="table-wrap"><table class="table"><thead><tr><th>الصلاحية</th><th>مدير النظام</th><th>مشرف معمل</th><th>الدعم الفني</th><th>لجنة المعامل</th><th>هيئة التدريس</th><th>طالب</th><th>زائر</th></tr></thead><tbody>' +
+        [['عرض المعامل والمحطات والجدول', 1, 1, 1, 1, 1, 1, 0], ['الإبلاغ عن عطل', 1, 1, 1, 1, 1, 1, 1], ['تتبع البلاغ', 1, 1, 1, 1, 1, 1, 1], ['حجز معمل', 1, 1, 1, 1, 1, 1, 0], ['الموافقة على الحجوزات', 1, 'معامله', 0, 0, 0, 0, 0],
+          ['إدارة الأجهزة والمحطات', 1, 'معامله', 0, 0, 0, 0, 0], ['معالجة البلاغات (المستوى 1)', 1, 'معامله', 0, 0, 0, 0, 0], ['معالجة البلاغات المحوّلة (المستوى 2)', 1, 0, 1, 0, 0, 0, 0],
+          ['قرار الشراء والاستبدال (المستوى 3)', 1, 0, 0, 1, 0, 0, 0], ['الملاحظات الداخلية على البلاغ', 1, 1, 1, 1, 0, 0, 0], ['التقارير', 1, 'معامله', 0, 1, 0, 0, 0],
+          ['الطلبات بين الأقسام', 1, 'قسمه', 1, 1, 'رئيس القسم', 0, 0], ['الحرم والمعامل والبيانات المرجعية', 1, 0, 0, 0, 0, 0, 0], ['إدارة المستخدمين', 1, 0, 0, 0, 0, 0, 0]]
           .map((r) => '<tr><td>' + r[0] + '</td>' + r.slice(1).map((c) => '<td>' + (c === 1 ? '<span style="color:var(--ok)">' + icon('check').replace('<svg', '<svg width="18" height="18"') + '</span>' : c === 0 ? '<span class="muted">—</span>' : '<span class="small muted">' + c + (c === 'رئيس القسم' ? '' : ' فقط') + '</span>') + '</td>').join('') + '</tr>').join('') +
         '</tbody></table></div>', '', true);
     return {
@@ -1847,14 +2315,14 @@
     U.toast('تم تصدير ' + (rows.length - 1) + ' جهازًا');
   }
   function exportTickets() {
-    const rows = [['الرقم', 'العنوان', 'المعمل', 'الجهاز', 'الأولوية', 'الحالة', 'المبلّغ', 'تاريخ البلاغ', 'تاريخ الحل']];
-    S.coll('tickets').filter((t) => isAdmin() || managesLab(t.labId)).forEach((t) => rows.push([t.ref, t.title, labName(t.labId), (dev(t.deviceId) || {}).tag || '', TK_PRI[t.priority][0], TK_STATUS[t.status][0], userName(t.reporterId), t.createdAt, t.resolvedAt]));
+    const rows = [['الرقم', 'العنوان', 'المعمل', 'الأجهزة', 'الأولوية', 'الحالة', 'المبلّغ', 'تاريخ البلاغ', 'تاريخ الحل', 'نوع العطل', 'المحطة', 'الفصل', 'محوّل للدعم الفني', 'قرار اللجنة']];
+    S.coll('tickets').filter((t) => isAdmin() || managesLab(t.labId)).forEach((t) => rows.push([t.ref, t.title, labName(t.labId), tkDevices(t).map((d) => d.tag).join(' '), TK_PRI[t.priority][0], TK_STATUS[t.status][0], reporterName(t), t.createdAt, t.resolvedAt, (ISSUE_TYPE[t.issueType] || ['—'])[0], stationLabel(t.stationId), semName(t.semesterId), t.forwardedIT ? 'نعم' : 'لا', t.approval ? AP_STATUS[t.approval.status][0] : '—']));
     U.download('maintenance-' + today() + '.csv', U.toCSV(rows), 'text/csv;charset=utf-8');
     U.toast('تم تصدير ' + (rows.length - 1) + ' بلاغًا');
   }
 
   /* ===== الإجراءات ===== */
-  const VIEWS = { requests: () => viewRequests(''), dashboard: viewDashboard, labs: viewLabs, devices: viewDevices, schedule: viewSchedule, bookings: viewBookings, maintenance: viewMaintenance, reports: viewReports, users: viewUsers, settings: viewSettings };
+  const VIEWS = { campuses: viewCampuses, approvals: viewApprovals, reference: viewReference, requests: () => viewRequests(''), dashboard: viewDashboard, labs: viewLabs, devices: viewDevices, schedule: viewSchedule, bookings: viewBookings, maintenance: viewMaintenance, reports: viewReports, users: viewUsers, settings: viewSettings };
   const withB = (fn) => (id) => { const b = S.byId('bookings', id); if (b) fn(b); };
   const ACTIONS = {
     logout() { S.session.clear(); me = null; location.hash = ''; render(); },
@@ -1900,7 +2368,7 @@
     editDevice(id) { const d = dev(id); if (d) deviceModal(d); },
     viewDevice(id) { go('dev-' + id); },
     recordCal(id) { const d = dev(id); if (d) calModal(d); },
-    reportDevice(id) { const d = dev(id); if (d) ticketModal({ labId: d.labId, deviceId: d.id }); },
+    reportDevice(id) { const d = dev(id); if (d) ticketModal({ labId: d.labId, stationId: d.stationId || '', deviceIds: [d.id] }); },
     deleteDevice(id) {
       const d = dev(id); if (!d) return;
       U.confirmDialog({ title: 'حذف الجهاز', danger: true, confirmText: 'حذف', message: 'حذف ' + d.name + ' (' + d.tag + ') من سجل الأجهزة؟ يبقى سجل الصيانة السابق محفوظًا.', onConfirm() { S.remove('devices', id); S.log(me.id, 'حذف الجهاز ' + d.tag); U.toast('تم حذف الجهاز'); setTimeout(() => route().startsWith('dev-') ? go('devices') : render()); } });
@@ -1908,6 +2376,7 @@
     devicesCal() { Object.assign(st.devices, { status: 'cal', lab: '', type: '', q: '' }); go('devices'); },
     newTicket(id) { ticketModal({ labId: id }); },
     viewTicket(id) { go('tk-' + id); },
+    tkTab(id) { st.tickets.tab = id; go('maintenance'); },
     tkAct(id) { const [tid, action] = id.split('|'); const t = S.byId('tickets', tid); if (t) tkAct(t, action); },
     deleteTicket(id) {
       const t = S.byId('tickets', id); if (!t) return;
@@ -1929,6 +2398,20 @@
       U.confirmDialog({ title: 'حذف القسم', danger: true, confirmText: 'حذف', message: 'حذف قسم ' + d.name + '؟ تبقى الطلبات السابقة المرتبطة به في السجل.', onConfirm() { S.remove('departments', id); U.toast('تم حذف القسم'); setTimeout(render); } });
     },
     newRequest() { requestModal(); },
+    newCampus() { campusModal(); },
+    editCampus(id) { const c = campus(id); if (c) campusModal(c); },
+    deleteCampus(id) { const c = campus(id); if (c) U.confirmDialog({ title: 'حذف ' + c.name, danger: true, confirmText: 'حذف', message: 'حذف هذا الحرم؟ لا توجد معامل مرتبطة به.', onConfirm() { S.remove('campuses', id); U.toast('تم الحذف'); setTimeout(render); } }); },
+    newStation(id) { stationModal(null, id); },
+    editStation(id) { const x = station(id); if (x) stationModal(x); },
+    deleteStation(id) { S.remove('stations', id); U.toast('تم حذف المحطة'); setTimeout(render); },
+    reportStation(id) { const x = station(id); if (x) ticketModal({ labId: x.labId, stationId: x.id }); },
+    newType() { typeModal(); },
+    editType(id) { const t = S.byId('deviceTypes', id); if (t) typeModal(t); },
+    deleteType(id) { S.remove('deviceTypes', id); U.toast('تم الحذف'); setTimeout(render); },
+    newSem() { semModal(); },
+    editSem(id) { const x = S.byId('semesters', id); if (x) semModal(x); },
+    deleteSem(id) { S.remove('semesters', id); U.toast('تم الحذف'); setTimeout(render); },
+
     palette() { openPalette(); },
     printReq(id) { const r = S.byId('requests', id); if (r) printRequest(r); },
     reqAct(id) { const [rid, action] = id.split('|'); const r = S.byId('requests', rid); if (r) rqAct(r, action); },

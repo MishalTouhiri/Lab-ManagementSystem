@@ -279,6 +279,20 @@
       }
     ];
   }
+  /* الفصول الدراسية حول العام الأكاديمي الحالي */
+  function buildSemesters() {
+    const t = new Date();
+    const Y = t.getMonth() >= 7 ? t.getFullYear() : t.getFullYear() - 1;
+    const list = [];
+    [Y - 1, Y].forEach((y) => {
+      list.push({ id: 'S' + y + '-1', name: 'الفصل الأول ' + y + '–' + (y + 1), start: y + '-08-23', end: y + '-12-31' });
+      list.push({ id: 'S' + y + '-2', name: 'الفصل الثاني ' + y + '–' + (y + 1), start: (y + 1) + '-01-10', end: (y + 1) + '-05-21' });
+      list.push({ id: 'S' + y + '-3', name: 'الفصل الصيفي ' + (y + 1), start: (y + 1) + '-06-07', end: (y + 1) + '-08-06' });
+    });
+    return list;
+  }
+  const ISSUE_GUESS = { t1: 'network', t2: 'hardware', t3: 'hardware', t4: 'electrical', t5: 'network', t6: 'hardware' };
+
   /* تضيف الأقسام والطلبات إلى بيانات محفوظة من إصدار سابق دون حذف أي شيء */
   function migrate(d) {
     let changed = false;
@@ -304,6 +318,61 @@
       if (dv.status !== 'working') hst.push({ at: atISO(iso(addDays(new Date(), -3)), 10), userId: sup, kind: 'status', from: 'working', to: dv.status, text: dv.notes || '' });
       dv.history = hst; changed = true;
     });
+    // الهيكل كما في مشروع التخرج: الحرم ← المعمل ← المحطة ← الجهاز
+    if (!Array.isArray(d.campuses)) {
+      d.campuses = [
+        { id: 'C1', code: 'MAIN', name: 'الحرم الرئيسي', city: 'الرياض', address: 'طريق الملك عبدالله' },
+        { id: 'C2', code: 'NRT', name: 'حرم الشمال', city: 'الرياض', address: 'حي النرجس' }
+      ];
+      changed = true;
+    }
+    const LAB_CAMPUS = { L1: 'C1', L2: 'C1', L3: 'C1', L4: 'C1', L5: 'C2', L6: 'C1' };
+    d.labs.forEach((l) => { if (!l.campusId) { l.campusId = LAB_CAMPUS[l.id] || d.campuses[0].id; changed = true; } });
+    if (!Array.isArray(d.deviceTypes)) {
+      d.deviceTypes = [
+        { id: 'computer', name: 'حاسب آلي', calibration: false }, { id: 'display', name: 'أجهزة عرض', calibration: false },
+        { id: 'network', name: 'معدات شبكات', calibration: false }, { id: 'instrument', name: 'جهاز قياس', calibration: true },
+        { id: 'electronics', name: 'إلكترونيات', calibration: false }, { id: 'server', name: 'خادم', calibration: false },
+        { id: 'other', name: 'أخرى', calibration: false }
+      ];
+      changed = true;
+    }
+    if (!Array.isArray(d.stations)) {
+      d.stations = [];
+      const N = { L1: 7, L2: 5, L3: 5, L4: 4, L5: 6, L6: 3 };
+      d.labs.forEach((l) => {
+        d.stations.push({ id: l.id + '-S00', labId: l.id, code: l.code + '-S00', name: 'منصة المحاضر', note: '' });
+        for (let i = 1; i <= (N[l.id] || 4); i++) d.stations.push({ id: l.id + '-S' + pad(i), labId: l.id, code: l.code + '-S' + pad(i), name: 'محطة ' + i, note: '' });
+      });
+      const byLab = {};
+      d.devices.forEach((dv) => { (byLab[dv.labId] = byLab[dv.labId] || []).push(dv); });
+      Object.keys(byLab).forEach((labId) => {
+        const sts = d.stations.filter((x) => x.labId === labId);
+        let k = 0;
+        byLab[labId].forEach((dv) => {
+          if (dv.stationId || !sts.length) return;
+          if (dv.type === 'display' || dv.type === 'server' || /-(PJ|PR)-/.test(dv.tag) || sts.length === 1) dv.stationId = sts[0].id;
+          else { dv.stationId = sts[1 + (k % (sts.length - 1))].id; k++; }
+        });
+      });
+      changed = true;
+    }
+    d.devices.forEach((dv) => {
+      if (dv.barcode) return;
+      let hs = 7; for (const ch of dv.tag) hs = (hs * 31 + ch.charCodeAt(0)) % 1e9;
+      dv.barcode = '628' + String(hs).padStart(9, '0'); changed = true;
+    });
+    if (!Array.isArray(d.semesters)) { d.semesters = buildSemesters(); changed = true; }
+    const semFor = (ds) => (d.semesters.find((x) => ds >= x.start && ds <= x.end) || d.semesters[d.semesters.length - 1] || {}).id || '';
+    if (!d.users.some((u) => u.id === 'u10')) { d.users.push({ id: 'u10', name: 'م. تركي العنزي', username: 'it', password: 'it123', role: 'it', email: 't.alanazi@lab.local', phone: '0581230456', dept: 'تقنية المعلومات', active: true }); changed = true; }
+    if (!d.users.some((u) => u.id === 'u11')) { d.users.push({ id: 'u11', name: 'د. منى القرشي', username: 'committee', password: 'committee123', role: 'committee', email: 'm.alqurashi@lab.local', phone: '0549871230', dept: 'علوم الحاسب', active: true }); changed = true; }
+    d.tickets.forEach((t) => {
+      if (!t.semesterId) { t.semesterId = semFor(t.createdAt); changed = true; }
+      if (!t.issueType) { t.issueType = ISSUE_GUESS[t.id] || 'hardware'; changed = true; }
+      if (!Array.isArray(t.deviceIds)) { t.deviceIds = t.deviceId ? [t.deviceId] : []; changed = true; }
+      if (t.stationId === undefined) { const dv = d.devices.find((x) => x.id === t.deviceId); t.stationId = dv ? dv.stationId || '' : ''; changed = true; }
+      if (!Array.isArray(t.attachments)) { t.attachments = []; changed = true; }
+    });
     d.tickets.forEach((t) => {
       if (Array.isArray(t.log)) return;
       const L = [{ at: atISO(t.createdAt, 9), userId: t.reporterId, kind: 'status', status: 'open', text: '' }];
@@ -311,6 +380,21 @@
       if (t.status === 'resolved') { t.resolution = t.resolution || t.description || 'تم الإصلاح وإعادة الجهاز للخدمة.'; L.push({ at: atISO(t.resolvedAt || t.createdAt, 14), userId: t.assigneeId, kind: 'status', status: 'resolved', text: t.resolution }); }
       t.log = L; changed = true;
     });
+    d.flags = d.flags || {};
+    if (!d.flags.gp) {
+      d.flags.gp = true; changed = true;
+      const t1 = d.tickets.find((t) => t.id === 't1');
+      if (t1 && !t1.forwardedIT) { t1.forwardedIT = true; t1.assigneeId = 'u10'; t1.log.push({ at: atISO(t1.createdAt, 15), userId: 'u2', kind: 'forward', to: 'u10', text: 'العطل في منفذ الموجّه نفسه وليس في الكابل، يحتاج فحصًا من الدعم الفني.' }); }
+      const t4 = d.tickets.find((t) => t.id === 't4');
+      if (t4 && !t4.approval) {
+        t4.approval = { status: 'pending', kind: 'purchase', cost: 18500, reason: 'استبدال وحدتي تكييف بقدرة 24 ألف وحدة لتحمّل حرارة خوادم التدريب.', requestedBy: 'u2', at: atISO(iso(addDays(new Date(), -2)), 11) };
+        t4.log.push({ at: t4.approval.at, userId: 'u2', kind: 'escalate', text: t4.approval.reason });
+      }
+      if (!d.tickets.some((t) => t.guest)) {
+        d.counters.ticket = (d.counters.ticket || 1042) + 1;
+        d.tickets.push({ id: 't7', ref: 'MT-' + d.counters.ticket, labId: 'L1', stationId: 'L1-S03', deviceId: '', deviceIds: [], title: 'برنامج MATLAB لا يفتح على أجهزة المحطة 3', description: 'تظهر رسالة انتهاء الترخيص عند تشغيل البرنامج.', issueType: 'software', priority: 'medium', status: 'open', reporterId: '', guest: { name: 'نادي الروبوت', email: 'robotics.club@example.com' }, assigneeId: 'u2', createdAt: todayISO, resolvedAt: '', semesterId: semFor(todayISO), attachments: [], log: [{ at: new Date().toISOString(), userId: '', kind: 'status', status: 'open', text: '' }] });
+      }
+    }
     d.counters = d.counters || {};
     if (!d.counters.req) { d.counters.req = 142; changed = true; }
     return changed;
@@ -327,7 +411,10 @@
     else if (migrate(data)) save();
     return data;
   }
-  function save() { writeRaw(KEY, JSON.stringify(data)); }
+  function save() {
+    try { window.localStorage.setItem(KEY, JSON.stringify(data)); }
+    catch (e) { memory[KEY] = JSON.stringify(data); try { window.dispatchEvent(new CustomEvent('labms:savefail')); } catch (x) { /* ignore */ } }
+  }
   function reset() { data = seed(); save(); return data; }
 
   function importJSON(text) {
