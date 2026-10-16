@@ -26,6 +26,7 @@
     schedule: { lab: '', week: 0 },
     reports: { period: 'month' },
     users: { q: '', role: '' },
+    req: { box: '', group: 'all', type: '', dept: '', q: '', scroll: 0 },
     labTab: 'devices'
   };
 
@@ -97,7 +98,8 @@
         { id: 'devices', label: 'الأجهزة والمعدات', icon: 'cpu' },
         { id: 'schedule', label: 'الجدول الأسبوعي', icon: 'grid' },
         { id: 'bookings', label: 'الحجوزات', icon: 'calendar', count: () => pendingForMe().length },
-        { id: 'maintenance', label: 'الصيانة والأعطال', icon: 'wrench', count: () => openTicketsForMe().length }
+        { id: 'maintenance', label: 'الصيانة والأعطال', icon: 'wrench', count: () => openTicketsForMe().length },
+        { id: 'requests', label: 'طلبات الأقسام', icon: 'swap', roles: ['admin', 'supervisor', 'faculty'], count: () => rqInboxCount() }
       ]
     },
     {
@@ -125,12 +127,15 @@
     const r = route();
     let view;
     if (r.startsWith('lab-')) view = viewLab(r.slice(4));
-    else {
+    else if (r.startsWith('req-')) {
+      if (me.role === 'student') { location.replace('#dashboard'); return; }
+      view = viewRequests(r.slice(4));
+    } else {
       const item = NAV.flatMap((g) => g.items).find((i) => i.id === r);
       if (!item || !allowed(item)) { location.replace('#dashboard'); return; }
       view = VIEWS[r]();
     }
-    renderShell(view, r.startsWith('lab-') ? 'labs' : r);
+    renderShell(view, r.startsWith('lab-') ? 'labs' : r.startsWith('req-') ? 'requests' : r);
   }
 
   function renderShell(view, active) {
@@ -168,12 +173,19 @@
       '<main class="content" id="view">' + view.html + '</main>' +
       '</div></div>';
     if (view.mount) view.mount(document.getElementById('view'));
-    window.scrollTo(0, 0);
+    // في عرض القائمة والتفاصيل جنبًا إلى جنب لا نعيد الصفحة للأعلى عند اختيار طلب
+    if (active !== lastActive || !(window.matchMedia && window.matchMedia('(min-width: 1101px)').matches)) window.scrollTo(0, 0);
+    lastActive = active;
   }
+  let lastActive = '';
 
   function notifications() {
     const out = [];
     pendingForMe().slice(0, 5).forEach((b) => out.push({ cls: 'warn', icon: 'calendar', title: 'طلب حجز: ' + b.title, sub: labName(b.labId) + ' · ' + U.fmtDay(b.date) + ' · ' + userName(b.userId), go: 'bookings' }));
+    if (me.role !== 'student') {
+      S.coll('requests').filter((r) => (r.status === 'new' && isReceiver(r) && (r.toDept === me.dept || isAdmin())) || (r.status === 'info' && isSender(r))).slice(0, 4)
+        .forEach((r) => out.push({ cls: r.status === 'info' ? 'warn' : 'info', icon: 'swap', title: (r.status === 'info' ? 'مطلوب استكمال: ' : 'طلب وارد من ' + r.fromDept + ': ') + r.title, sub: r.ref + ' · ' + RQ_TYPE[r.type][0], go: 'req-' + r.id }));
+    }
     if (isStaff()) {
       S.coll('devices').filter((d) => managesLab(d.labId)).forEach((d) => {
         const c = calState(d);
@@ -253,6 +265,10 @@
       const late = calDue.filter((d) => calState(d).days < 0).length;
       alerts += '<div class="alert' + (late ? ' bad' : '') + '">' + icon('gauge') + '<div class="grow"><b>' + countTxt(calDue.length, 'جهاز واحد يحتاج', 'جهازان يحتاجان', 'أجهزة تحتاج', 'جهازًا يحتاج') + ' إلى معايرة خلال 7 أيام' + (late ? '، منها ' + late + ' متأخرة' : '') + '.</b> ' +
         h(calDue.map((d) => d.tag).join('، ')) + '</div><button class="btn btn-sm" data-act="devicesCal">عرض الأجهزة</button></div>';
+    }
+    if (me.role !== 'student') {
+      const rq = S.coll('requests').filter((r) => rqVisible(r) && rqNeedsMe(r) && (r.toDept === me.dept || r.fromDept === me.dept || r.requesterId === me.id));
+      if (rq.length) alerts += '<div class="alert info">' + icon('swap') + '<div class="grow"><b>' + countTxt(rq.length, 'طلب واحد', 'طلبان', 'طلبات', 'طلبًا') + ' بين الأقسام بانتظار إجرائك</b>' + (rq.some(rqLate) ? '، منها ' + rq.filter(rqLate).length + ' متأخر' : '') + '.</div><a class="btn btn-sm" href="#requests">فتح الطلبات</a></div>';
     }
     if (!isStaff()) {
       const mine = bks.filter((b) => b.userId === me.id && b.status === 'pending' && b.date >= t).length;
@@ -377,6 +393,7 @@
       '<dt>رمز المعمل</dt><dd><span class="tag">' + h(l.code) + '</span></dd>' +
       '<dt>الموقع</dt><dd>' + h(l.building) + ' · قاعة ' + h(l.room) + '</dd>' +
       '<dt>النوع</dt><dd>' + h(LAB_TYPE[l.type]) + '</dd>' +
+      '<dt>القسم</dt><dd>' + h(l.dept || '—') + '</dd>' +
       '<dt>السعة</dt><dd>' + l.capacity + ' مقعدًا</dd>' +
       '<dt>ساعات العمل</dt><dd>' + U.fmtTime(l.open) + ' – ' + U.fmtTime(l.close) + ' (الأحد إلى الخميس)</dd>' +
       '<dt>المشرف</dt><dd>' + (sup ? h(sup.name) + ' · <span class="ltr">' + h(sup.email) + '</span>' : '—') + '</dd>' +
@@ -416,6 +433,7 @@
       { name: 'supervisorId', label: 'المشرف', type: 'select', options: sups, placeholder: 'اختر المشرف', required: true },
       { name: 'open', label: 'بداية الدوام', type: 'time', required: true },
       { name: 'close', label: 'نهاية الدوام', type: 'time', required: true },
+      { name: 'dept', label: 'القسم المالك', type: 'select', required: true, span: true, placeholder: 'اختر القسم', options: S.coll('departments').map((d) => ({ value: d.name, label: d.name })) },
       { name: 'description', label: 'وصف وتجهيزات المعمل', type: 'textarea', span: true }
     ];
     U.modal({
@@ -971,8 +989,8 @@
       '<select class="select" id="us-role" aria-label="الدور"><option value="">كل الأدوار</option>' + optsOf(ROLE).map((o) => '<option value="' + o.value + '"' + (f.role === o.value ? ' selected' : '') + '>' + o.label + '</option>').join('') + '</select></div>' +
       '<div id="us-list"></div></section>' +
       card('مصفوفة الصلاحيات', '', '<div class="table-wrap"><table class="table"><thead><tr><th>الصلاحية</th><th>مدير النظام</th><th>مشرف معمل</th><th>عضو هيئة تدريس</th><th>طالب</th></tr></thead><tbody>' +
-        [['عرض المعامل والجدول', 1, 1, 1, 1], ['طلب حجز معمل', 1, 1, 1, 1], ['تأكيد الحجز مباشرة', 1, 'معامله', 0, 0], ['الموافقة على الطلبات', 1, 'معامله', 0, 0], ['إدارة الأجهزة', 1, 'معامله', 0, 0], ['الإبلاغ عن عطل', 1, 1, 1, 1], ['معالجة البلاغات', 1, 'معامله', 0, 0], ['التقارير', 1, 'معامله', 0, 0], ['إضافة وحذف المعامل', 1, 0, 0, 0], ['إدارة المستخدمين', 1, 0, 0, 0]]
-          .map((r) => '<tr><td>' + r[0] + '</td>' + r.slice(1).map((c) => '<td>' + (c === 1 ? '<span style="color:var(--ok)">' + icon('check').replace('<svg', '<svg width="18" height="18"') + '</span>' : c === 0 ? '<span class="muted">—</span>' : '<span class="small muted">' + c + ' فقط</span>') + '</td>').join('') + '</tr>').join('') +
+        [['عرض المعامل والجدول', 1, 1, 1, 1], ['طلب حجز معمل', 1, 1, 1, 1], ['تأكيد الحجز مباشرة', 1, 'معامله', 0, 0], ['الموافقة على الطلبات', 1, 'معامله', 0, 0], ['إدارة الأجهزة', 1, 'معامله', 0, 0], ['الإبلاغ عن عطل', 1, 1, 1, 1], ['معالجة البلاغات', 1, 'معامله', 0, 0], ['التقارير', 1, 'معامله', 0, 0], ['إضافة وحذف المعامل', 1, 0, 0, 0], ['الطلبات بين الأقسام: الإرسال', 1, 1, 1, 0], ['الطلبات بين الأقسام: البت في الوارد', 1, 'قسمه', 'رئيس القسم', 0], ['إدارة المستخدمين', 1, 0, 0, 0]]
+          .map((r) => '<tr><td>' + r[0] + '</td>' + r.slice(1).map((c) => '<td>' + (c === 1 ? '<span style="color:var(--ok)">' + icon('check').replace('<svg', '<svg width="18" height="18"') + '</span>' : c === 0 ? '<span class="muted">—</span>' : '<span class="small muted">' + c + (c === 'رئيس القسم' ? '' : ' فقط') + '</span>') + '</td>').join('') + '</tr>').join('') +
         '</tbody></table></div>', '', true);
     return {
       title: 'المستخدمون', crumb: 'الإدارة', html,
@@ -1005,7 +1023,7 @@
       { name: 'password', label: existing ? 'كلمة مرور جديدة' : 'كلمة المرور', type: 'password', required: !existing, ltr: true, autocomplete: 'new-password', hint: existing ? 'اتركها فارغة للإبقاء على الحالية' : '6 أحرف على الأقل' },
       { name: 'role', label: 'الدور', type: 'select', options: optsOf(ROLE), required: true },
       { name: 'active', label: 'حالة الحساب', type: 'select', options: [{ value: '1', label: 'نشط' }, { value: '0', label: 'موقوف' }] },
-      { name: 'dept', label: 'القسم', placeholder: 'علوم الحاسب' },
+      { name: 'dept', label: 'القسم', type: 'select', placeholder: 'اختر القسم', options: S.coll('departments').map((d) => ({ value: d.name, label: d.name })) },
       { name: 'phone', label: 'الجوال', ltr: true, placeholder: '05XXXXXXXX' },
       { name: 'email', label: 'البريد الإلكتروني', type: 'email', ltr: true, span: true }
     ];
@@ -1096,6 +1114,369 @@
     };
   }
 
+  /* ===== الطلبات بين الأقسام ===== */
+  const RQ_TYPE = {
+    loan: ['إعارة جهاز', 'cpu', 'استعارة جهاز من معامل قسم آخر لفترة محددة'],
+    lab: ['استخدام معمل', 'flask', 'حجز معمل يتبع قسمًا آخر'],
+    supplies: ['مواد ومستلزمات', 'box', 'مواد أو قطع من مخزون قسم آخر'],
+    support: ['دعم فني', 'wrench', 'تثبيت برامج أو شبكات أو صيانة'],
+    transfer: ['نقل عهدة', 'swap', 'نقل جهاز من معامل قسمك إلى قسم آخر'],
+    other: ['طلب عام', 'doc', 'أي طلب آخر بين الأقسام']
+  };
+  const RQ_STATUS = { new: ['جديد', 'info'], review: ['قيد المراجعة', 'info'], info: ['بحاجة لاستكمال', 'warn'], approved: ['معتمد', 'accent'], progress: ['قيد التنفيذ', 'accent'], done: ['مكتمل', 'ok'], rejected: ['مرفوض', 'bad'], cancelled: ['ملغى', ''] };
+  const RQ_FLOW = {
+    review: { to: 'review', verb: 'استلم الطلب للمراجعة', toast: 'تم استلام الطلب للمراجعة' },
+    approve: { to: 'approved', verb: 'اعتمد الطلب', toast: 'تم اعتماد الطلب' },
+    info: { to: 'info', verb: 'طلب استكمال معلومات', toast: 'أُعيد الطلب إلى القسم المرسل لاستكماله', note: 'required', title: 'طلب استكمال معلومات', label: 'ما المعلومات المطلوبة من القسم المرسل؟', btn: 'إرسال' },
+    reject: { to: 'rejected', verb: 'رفض الطلب', toast: 'تم رفض الطلب', note: 'required', title: 'رفض الطلب', label: 'سبب الرفض (يظهر للقسم المرسل)', btn: 'رفض الطلب', danger: true },
+    progress: { to: 'progress', verb: 'بدأ التنفيذ', toast: 'بدأ تنفيذ الطلب' },
+    done: { to: 'done', verb: 'أكمل الطلب', toast: 'تم إكمال الطلب', note: 'optional', title: 'إكمال الطلب', label: 'ملاحظة الإكمال', btn: 'تأكيد الإكمال' },
+    resubmit: { to: 'review', verb: 'أرسل المعلومات المطلوبة', toast: 'أُرسل الاستكمال إلى القسم المستلم', note: 'required', title: 'إرسال الاستكمال', label: 'المعلومات المطلوبة', btn: 'إرسال' },
+    cancel: { to: 'cancelled', verb: 'ألغى الطلب', toast: 'تم إلغاء الطلب', note: 'optional', title: 'إلغاء الطلب', label: 'سبب الإلغاء', btn: 'إلغاء الطلب', danger: true }
+  };
+  const rqOpen = (r) => !['done', 'rejected', 'cancelled'].includes(r.status);
+  const deptOf = (name) => S.coll('departments').find((d) => d.name === name);
+  const dCode = (name) => (deptOf(name) || {}).code || '—';
+  const actsFor = (name) => isAdmin() || (me.dept === name && (me.role === 'supervisor' || (deptOf(name) || {}).managerId === me.id));
+  const isReceiver = (r) => actsFor(r.toDept);
+  const isSender = (r) => r.requesterId === me.id || actsFor(r.fromDept);
+  const rqVisible = (r) => isAdmin() || me.dept === r.fromDept || me.dept === r.toDept || r.requesterId === me.id;
+  const rqLate = (r) => rqOpen(r) && r.dueDate && r.dueDate < today();
+  const rqNeedsMe = (r) => (isReceiver(r) && ['new', 'review', 'approved', 'progress'].includes(r.status) && (!isAdmin() || r.toDept === me.dept || r.status === 'new')) || (r.status === 'info' && isSender(r));
+  const rqInboxCount = () => me.role === 'student' ? 0 : S.coll('requests').filter((r) => (r.status === 'new' && isReceiver(r)) || (r.status === 'info' && r.requesterId === me.id)).length;
+  const fmtStamp = (s) => { const d = new Date(s); return d.getDate() + ' ' + U.MONTHS[d.getMonth()]; };
+  const shortRef = (r) => '#' + String(r.ref).split('-').pop();
+  const routeMini = (r) => '<span class="route" title="من ' + h(r.fromDept) + ' إلى ' + h(r.toDept) + '"><b>' + h(dCode(r.fromDept)) + '</b>' + icon('arrowL') + '<b>' + h(dCode(r.toDept)) + '</b></span>';
+  const priMini = (p) => '<span class="pri ' + p + '">' + icon('flag') + h(TK_PRI[p][0]) + '</span>';
+  function dueTxt(r) {
+    if (!r.dueDate) return '';
+    const days = Math.round((U.parseDate(r.dueDate) - U.parseDate(today())) / 864e5);
+    if (!rqOpen(r)) return '<span class="due">' + icon('flag') + U.fmtDate(r.dueDate).replace(/ \d{4}$/, '') + '</span>';
+    if (days < 0) return '<span class="due late">' + icon('clock') + 'متأخر ' + daysTxt(-days) + '</span>';
+    if (days === 0) return '<span class="due soon">' + icon('clock') + 'مستحق اليوم</span>';
+    return '<span class="due' + (days <= 2 ? ' soon' : '') + '">' + icon('clock') + 'خلال ' + daysTxt(days) + '</span>';
+  }
+
+  function rqItem(r, sel) {
+    const t = RQ_TYPE[r.type] || RQ_TYPE.other;
+    const unread = r.status === 'new' && isReceiver(r);
+    return '<a class="rq-item' + (sel ? ' sel' : '') + (unread ? ' unread' : '') + '" href="#req-' + r.id + '"' + (sel ? ' aria-current="true"' : '') + '>' +
+      '<div class="rq-ico" title="' + h(t[0]) + '">' + icon(t[1]) + '</div>' +
+      '<div style="min-width:0"><div class="t">' + h(r.title) + '</div><div class="sub"><span class="tag">' + h(shortRef(r)) + '</span>' + routeMini(r) + priMini(r.priority) + '</div></div>' +
+      '<div class="rq-side">' + pill(RQ_STATUS, r.status) + dueTxt(r) + '</div></a>';
+  }
+
+  function viewRequests(selId) {
+    const f = st.req;
+    const vis = () => S.coll('requests').filter(rqVisible);
+    const boxes = [
+      ['in', 'الوارد لقسمي', (r) => r.toDept === me.dept],
+      ['out', 'الصادر من قسمي', (r) => r.fromDept === me.dept || r.requesterId === me.id],
+      ...(isAdmin() ? [['all', 'كل الطلبات', () => true]] : [])
+    ];
+    if (!boxes.some((b) => b[0] === f.box)) f.box = isAdmin() ? 'all' : 'in';
+    const groups = [
+      ['all', 'الكل', () => true],
+      ['action', 'بانتظار إجرائي', rqNeedsMe],
+      ['open', 'مفتوحة', rqOpen],
+      ['late', 'متأخرة', rqLate],
+      ['done', 'مكتملة', (r) => r.status === 'done'],
+      ['closed', 'مرفوضة وملغاة', (r) => r.status === 'rejected' || r.status === 'cancelled']
+    ];
+    const sortFn = (a, b) => rqOpen(b) - rqOpen(a) || rqNeedsMe(b) - rqNeedsMe(a) || PRI_ORDER[a.priority] - PRI_ORDER[b.priority] || b.createdAt.localeCompare(a.createdAt) || b.ref.localeCompare(a.ref);
+    const filtered = () => {
+      const q = f.q.toLowerCase();
+      const bx = boxes.find((b) => b[0] === f.box)[2];
+      const g = (groups.find((x) => x[0] === f.group) || groups[0])[2];
+      return vis().filter(bx).filter(g)
+        .filter((r) => !f.type || r.type === f.type)
+        .filter((r) => !f.dept || r.fromDept === f.dept || r.toDept === f.dept)
+        .filter((r) => !q || (r.ref + ' ' + r.title + ' ' + r.fromDept + ' ' + r.toDept + ' ' + userName(r.requesterId)).toLowerCase().includes(q))
+        .sort(sortFn);
+    };
+    const wide = window.matchMedia && window.matchMedia('(min-width: 1101px)').matches;
+    let sel = selId ? S.byId('requests', selId) : null;
+    if (sel && !rqVisible(sel)) sel = null;
+    if (!selId && wide) sel = filtered()[0] || null;
+    const all = vis();
+    const monthStart = today().slice(0, 8) + '01';
+
+    const html =
+      '<div class="page-head"><div class="t"><h2>الطلبات بين الأقسام</h2><p>' + (me.dept ? 'قسمك: ' + h(me.dept) + (actsFor(me.dept) && !isAdmin() ? ' · لديك صلاحية البت في الطلبات الواردة' : '') : '') + (isAdmin() ? ' · مدير النظام يرى طلبات كل الأقسام' : '') + '</p></div>' +
+      '<div class="actions"><button class="btn btn-primary" data-act="newRequest">' + icon('plus') + 'طلب جديد</button></div></div>' +
+      '<div class="grid grid-kpi rq-kpis' + (sel ? ' has-sel' : '') + '">' +
+      kpi('وارد جديد', all.filter((r) => r.toDept === me.dept && r.status === 'new').length, 'inbox', 'info', 'طلبات لم تُستلم بعد') +
+      kpi('بانتظار إجرائي', all.filter(rqNeedsMe).length, 'flag', 'warn', 'مراجعة أو تنفيذ أو استكمال') +
+      kpi('متأخرة', all.filter(rqLate).length, 'clock', 'bad', 'تجاوزت الموعد المطلوب') +
+      kpi('مكتملة هذا الشهر', all.filter((r) => r.status === 'done' && (r.completedAt || '') >= monthStart).length, 'check', '', 'منذ ' + U.fmtDate(monthStart)) +
+      '</div>' +
+      '<div class="req-layout' + (sel ? ' has-sel' : '') + '">' +
+      '<section class="card req-list-card" aria-label="قائمة الطلبات"><div class="tabs" role="tablist" id="rq-boxes"></div>' +
+      '<div class="req-filters"><div class="search">' + icon('search') + '<input class="input" id="rq-q" type="search" placeholder="ابحث برقم الطلب أو العنوان أو القسم" value="' + h(f.q) + '"></div>' +
+      '<div class="row"><select class="select" id="rq-type" aria-label="نوع الطلب"><option value="">كل الأنواع</option>' + Object.keys(RQ_TYPE).map((k) => '<option value="' + k + '"' + (f.type === k ? ' selected' : '') + '>' + RQ_TYPE[k][0] + '</option>').join('') + '</select>' +
+      '<select class="select" id="rq-dept" aria-label="القسم"><option value="">كل الأقسام</option>' + S.coll('departments').map((d) => '<option value="' + h(d.name) + '"' + (f.dept === d.name ? ' selected' : '') + '>' + h(d.name) + '</option>').join('') + '</select></div>' +
+      '<div class="chips" id="rq-groups"></div></div>' +
+      '<div class="rq-list" id="rq-list"></div></section>' +
+      '<section class="card req-detail" aria-label="تفاصيل الطلب">' + (sel ? rqDetail(sel) : selId ? emptyState('doc', 'الطلب غير موجود أو ليس لديك صلاحية عرضه') : emptyState('swap', 'اختر طلبًا من القائمة لعرض تفاصيله')) + '</section>' +
+      '</div>';
+
+    return {
+      title: 'الطلبات بين الأقسام', crumb: 'التشغيل', html,
+      mount(root) {
+        const list = root.querySelector('#rq-list'), boxesEl = root.querySelector('#rq-boxes'), groupsEl = root.querySelector('#rq-groups');
+        const draw = () => {
+          const v = vis();
+          boxesEl.innerHTML = boxes.map((b) => '<button role="tab" data-b="' + b[0] + '" class="' + (f.box === b[0] ? 'on' : '') + '">' + b[1] + '<span class="count">' + v.filter(b[2]).length + '</span></button>').join('');
+          const inBox = v.filter(boxes.find((b) => b[0] === f.box)[2]);
+          groupsEl.innerHTML = groups.map((g) => { const n = inBox.filter(g[2]).length; return '<button type="button" class="chip' + (f.group === g[0] ? ' on' : '') + ((g[0] === 'late' || g[0] === 'action') && n ? ' alert-chip' : '') + '" data-g="' + g[0] + '">' + g[1] + '<span class="n">' + n + '</span></button>'; }).join('');
+          const items = filtered();
+          list.innerHTML = items.length ? items.map((r) => rqItem(r, sel && sel.id === r.id)).join('') : emptyState('inbox', 'لا توجد طلبات مطابقة');
+        };
+        boxesEl.addEventListener('click', (e) => { const b = e.target.closest('[data-b]'); if (b) { f.box = b.dataset.b; f.scroll = 0; draw(); list.scrollTop = 0; } });
+        groupsEl.addEventListener('click', (e) => { const b = e.target.closest('[data-g]'); if (b) { f.group = b.dataset.g; f.scroll = 0; draw(); list.scrollTop = 0; } });
+        bindFilters(root, { '#rq-q': ['q', f], '#rq-type': ['type', f], '#rq-dept': ['dept', f] }, draw);
+        draw();
+        list.scrollTop = f.scroll || 0;
+        list.addEventListener('scroll', () => { f.scroll = list.scrollTop; });
+        const form = root.querySelector('#rq-comment');
+        if (form) form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const text = (form.querySelector('textarea').value || '').trim();
+          if (!text) return;
+          const r = S.byId('requests', form.dataset.id);
+          S.upsert('requests', Object.assign({}, r, { log: r.log.concat([{ at: new Date().toISOString(), userId: me.id, kind: 'comment', text }]) }));
+          U.toast('تم إرسال الرد');
+          render();
+        });
+      }
+    };
+  }
+
+  function rqDetail(r) {
+    const t = RQ_TYPE[r.type] || RQ_TYPE.other;
+    const fromD = deptOf(r.fromDept) || {}, toD = deptOf(r.toDept) || {};
+    const requester = user(r.requesterId) || {}, assignee = user(r.assigneeId);
+    const toMgr = user(toD.managerId);
+    const created = r.log[0] ? r.log[0].at : r.createdAt;
+
+    // مراحل الطلب
+    const steps = ['الإرسال', 'المراجعة', 'الاعتماد', 'التنفيذ', 'الإكمال'];
+    const CUR = { new: 1, review: 1, info: 1, approved: 3, progress: 3, done: 5 };
+    const stamp = (statuses) => { const e = r.log.filter((x) => x.kind === 'status' && statuses.includes(x.status)).pop(); return e ? fmtStamp(e.at) : ''; };
+    const stamps = [stamp(['new']), stamp(['review', 'info']), stamp(['approved']), stamp(['progress']), stamp(['done'])];
+    let cur = CUR[r.status], stopAt = -1;
+    if (r.status === 'rejected') stopAt = 2;
+    if (r.status === 'cancelled') { const prev = r.log.filter((x) => x.kind === 'status' && x.status !== 'cancelled').pop(); stopAt = Math.min(CUR[prev ? prev.status : 'new'] || 1, 4); }
+    const hint = { new: 'بانتظار الاستلام', review: 'جارية', info: 'بانتظار الاستكمال', approved: 'لم يبدأ', progress: 'جارٍ' }[r.status];
+    const stepper = '<div class="stepper" aria-label="مراحل الطلب">' + steps.map((s, i) => {
+      let cls = '', dot = String(i + 1), sub = '';
+      if (stopAt >= 0) {
+        if (i < stopAt) { cls = 'done'; dot = icon('check'); sub = stamps[i]; }
+        else if (i === stopAt) { cls = 'stop'; dot = icon('x'); s = r.status === 'rejected' ? 'مرفوض' : 'ملغى'; sub = stamp([r.status]); }
+      } else if (i < cur) { cls = 'done'; dot = icon('check'); sub = stamps[i]; }
+      else if (i === cur) { cls = r.status === 'info' ? 'hold' : 'cur'; sub = hint; }
+      return '<div class="step ' + cls + '"><div class="dot">' + dot + '</div><div>' + h(s) + (sub ? '<small>' + h(sub) + '</small>' : '') + '</div></div>';
+    }).join('') + '</div>';
+
+    // شريط الإجراءات حسب دور المستخدم
+    const btn = (a, label, cls, ic) => '<button class="btn ' + (cls || '') + '" data-act="reqAct" data-id="' + r.id + '|' + a + '">' + (ic ? icon(ic) : '') + label + '</button>';
+    let b = '', note;
+    if (isReceiver(r)) {
+      if (r.status === 'new') b += btn('review', 'استلام للمراجعة', 'btn-primary', 'eye');
+      if (r.status === 'new' || r.status === 'review') b += btn('approve', 'اعتماد', 'btn-ok', 'check') + btn('info', 'طلب استكمال', '', 'edit') + btn('reject', 'رفض', 'btn-danger', 'x');
+      if (r.status === 'approved') b += btn('progress', 'بدء التنفيذ', 'btn-primary', 'refresh');
+      if (r.status === 'progress') b += btn('done', 'تم التنفيذ', 'btn-ok', 'check');
+    }
+    if (isSender(r) && r.status === 'info') b += btn('resubmit', 'إرسال الاستكمال', 'btn-primary', 'send');
+    if (isSender(r) && ['new', 'review', 'info', 'approved'].includes(r.status)) b += btn('cancel', 'إلغاء الطلب', 'btn-ghost');
+    if (!rqOpen(r)) note = 'الطلب مغلق · ' + RQ_STATUS[r.status][0];
+    else if (r.status === 'info') note = isSender(r) ? 'القسم المستلم طلب معلومات إضافية منك' : 'بانتظار استكمال ' + r.fromDept;
+    else if (isReceiver(r) && b) note = 'القرار عند قسم ' + r.toDept;
+    else note = 'بانتظار إجراء قسم ' + r.toDept;
+    const actions = '<div class="rq-actions"><span class="note">' + icon('info') + h(note) + '</span>' + b + '</div>';
+
+    // تنبيه أعلى التفاصيل
+    const lastNote = (st0) => { const e = r.log.filter((x) => x.kind === 'status' && x.status === st0).pop(); return e && e.text ? e.text : ''; };
+    let banner = '';
+    if (r.status === 'info') banner = '<div class="alert rq-banner">' + icon('edit') + '<div class="grow"><b>مطلوب استكمال:</b> ' + h(lastNote('info')) + '</div></div>';
+    else if (r.status === 'rejected') banner = '<div class="alert bad rq-banner">' + icon('x') + '<div class="grow"><b>سبب الرفض:</b> ' + h(lastNote('rejected') || '—') + '</div></div>';
+    else if (rqLate(r)) banner = '<div class="alert bad rq-banner">' + icon('clock') + '<div class="grow"><b>تجاوز الطلب الموعد المطلوب</b> (' + U.fmtDate(r.dueDate) + ').</div></div>';
+    if (r.bookingId && S.byId('bookings', r.bookingId)) banner += '<div class="alert info rq-banner">' + icon('calendar') + '<div class="grow">أُضيف حجز مؤكد إلى جدول ' + h(labName(r.labId)) + '.</div><a class="btn btn-sm" href="#schedule" data-act="schedLab" data-id="' + r.labId + '">عرض الجدول</a></div>';
+
+    // معلومات حسب نوع الطلب
+    const fact = (k, v) => '<div class="fact"><span>' + h(k) + '</span><b>' + v + '</b></div>';
+    const d = dev(r.deviceId);
+    const devTxt = d ? '<span class="tag">' + h(d.tag) + '</span> ' + h(d.name) : '—';
+    let facts = fact('الأولوية', pill(TK_PRI, r.priority)) + fact('الموعد المطلوب', U.fmtDate(r.dueDate) + ' ' + (rqOpen(r) ? dueTxt(r) : '')) + fact('المسؤول في القسم المستلم', assignee ? h(assignee.name) : '<span class="muted">لم يُسند بعد</span>');
+    if (r.type === 'loan') facts += fact('الجهاز المطلوب', devTxt) + fact('الكمية', (r.qty || 1) + ' ' + (r.qty > 2 ? 'أجهزة' : r.qty === 2 ? '(جهازان)' : '')) + fact('فترة الإعارة', U.fmtDate(r.loanFrom) + ' ← ' + U.fmtDate(r.loanTo));
+    if (r.type === 'lab') facts += fact('المعمل', h(labName(r.labId))) + fact('الموعد', U.fmtDay(r.date) + ' · ' + U.fmtTime(r.start) + ' – ' + U.fmtTime(r.end)) + fact('عدد الحضور', r.attendees);
+    if (r.type === 'transfer') facts += fact('الجهاز', devTxt) + fact('من معمل', h(d ? labName(d.labId) : '—')) + fact('إلى معمل', h(labName(r.targetLabId)));
+    if (r.type === 'support' && d) facts += fact('الجهاز المعني', devTxt);
+
+    const items = r.items && r.items.length ? '<div class="rq-section"><h3>' + icon('box').replace('<svg', '<svg width="16" height="16"') + 'البنود المطلوبة (' + r.items.length + ')</h3><div class="items-tbl table-wrap"><table class="table"><thead><tr><th>البند</th><th>الكمية</th><th>الوحدة</th></tr></thead><tbody>' +
+      r.items.map((it) => '<tr><td>' + h(it.name) + '</td><td class="num">' + h(it.qty) + '</td><td>' + h(it.unit || '—') + '</td></tr>').join('') + '</tbody></table></div></div>' : '';
+
+    const verbOf = (e) => e.action && RQ_FLOW[e.action] ? RQ_FLOW[e.action].verb : e.status === 'new' ? 'أرسل الطلب' : (Object.values(RQ_FLOW).find((x) => x.to === e.status) || {}).verb || '';
+    const thread = '<div class="thread">' + r.log.map((e) => {
+      const u = user(e.userId) || { name: '—' };
+      if (e.kind === 'comment') return '<div class="ev"><div class="avatar">' + h(U.initials(u.name)) + '</div><div style="min-width:0"><div class="hd"><b>' + h(u.name) + '</b><time>' + U.timeAgo(e.at) + '</time></div><div class="bubble">' + h(e.text) + '</div></div></div>';
+      return '<div class="ev sys"><div class="avatar">' + icon(e.status === 'rejected' || e.status === 'cancelled' ? 'x' : e.status === 'info' ? 'edit' : 'check').replace('<svg', '<svg width="15" height="15"') + '</div><div style="min-width:0"><div class="hd"><b>' + h(u.name) + '</b><span>' + h(verbOf(e)) + '</span>' + pill(RQ_STATUS, e.status) + '<time>' + U.timeAgo(e.at) + '</time></div>' + (e.text ? '<div class="bubble">' + h(e.text) + '</div>' : '') + '</div></div>';
+    }).join('') + '</div>';
+
+    return '<a class="btn btn-sm back-btn" href="#requests">' + icon('chevronR') + 'كل الطلبات</a>' +
+      '<div class="rq-head"><div class="top"><span class="tag">' + h(r.ref) + '</span><span class="type-chip">' + icon(t[1]) + h(t[0]) + '</span>' + pill(RQ_STATUS, r.status) + '</div>' +
+      '<h2>' + h(r.title) + '</h2><div class="meta">أنشأه ' + h(requester.name || '—') + ' · ' + U.timeAgo(created) + ' · ' + U.fmtDate(r.createdAt) + '</div></div>' +
+      '<div class="route-band">' +
+      '<div class="dept-box"><div class="dcode">' + h(dCode(r.fromDept)) + '</div><div><span class="lbl">من قسم</span><b>' + h(r.fromDept) + '</b><div class="who">' + h(requester.name || '') + (fromD.ext ? ' · تحويلة ' + h(fromD.ext) : '') + '</div></div></div>' +
+      '<div class="route-arrow" aria-hidden="true">' + icon('arrowL') + '</div>' +
+      '<div class="dept-box to"><div class="dcode">' + h(dCode(r.toDept)) + '</div><div><span class="lbl">إلى قسم</span><b>' + h(r.toDept) + '</b><div class="who">' + h(toMgr ? 'رئيس القسم: ' + toMgr.name : '') + (toD.ext ? ' · تحويلة ' + h(toD.ext) : '') + '</div></div></div>' +
+      '</div>' +
+      stepper + banner + (banner ? '<div style="height:16px"></div>' : '') + actions +
+      '<div class="rq-section"><h3>تفاصيل الطلب</h3><div class="facts">' + facts + '</div></div>' +
+      items +
+      (r.description ? '<div class="rq-section"><h3>الوصف</h3><p class="rq-desc">' + h(r.description) + '</p></div>' : '') +
+      '<div class="rq-section"><h3>سجل الطلب والمراسلات</h3>' + thread + '</div>' +
+      '<form class="composer" id="rq-comment" data-id="' + r.id + '"><textarea class="textarea" name="text" id="rq-text" placeholder="اكتب ردًا أو استفسارًا للقسم ' + (isReceiver(r) && !isSender(r) ? 'المرسل' : 'المستلم') + '…" aria-label="الرد"></textarea><button class="btn btn-primary" type="submit">' + icon('send') + 'إرسال</button></form>';
+  }
+
+  function rqApply(r, action, text) {
+    const fl = RQ_FLOW[action];
+    const upd = Object.assign({}, r, { status: fl.to, log: r.log.concat([{ at: new Date().toISOString(), userId: me.id, kind: 'status', status: fl.to, action, text: text || '' }]) });
+    if (isReceiver(r) && action !== 'cancel' && action !== 'resubmit' && !r.assigneeId) upd.assigneeId = me.id;
+    if (action === 'done') upd.completedAt = today();
+    let extra = '';
+    if (action === 'approve' && r.type === 'lab' && r.labId) {
+      const err = validateBooking({ labId: r.labId, title: r.title, date: r.date, start: r.start, end: r.end, attendees: r.attendees });
+      if (err) return 'تعذّر إضافة الحجز إلى جدول المعمل: ' + err;
+      const bk = S.upsert('bookings', { labId: r.labId, title: r.title + ' (' + dCode(r.fromDept) + ')', userId: r.requesterId, date: r.date, start: r.start, end: r.end, attendees: r.attendees, status: 'approved', notes: 'من الطلب ' + r.ref, createdAt: today() }, 'bk');
+      upd.bookingId = bk.id;
+      extra = ' وأُضيف الحجز إلى جدول المعمل';
+    }
+    if ((action === 'reject' || action === 'cancel') && r.bookingId) {
+      const bk = S.byId('bookings', r.bookingId);
+      if (bk && bk.status === 'approved') S.upsert('bookings', Object.assign({}, bk, { status: 'cancelled', reason: 'أُلغي الطلب ' + r.ref }));
+    }
+    if (action === 'done' && r.type === 'transfer' && r.deviceId && r.targetLabId) {
+      const d = dev(r.deviceId);
+      if (d) { S.upsert('devices', Object.assign({}, d, { labId: r.targetLabId })); extra = ' ونُقل الجهاز ' + d.tag + ' إلى ' + labName(r.targetLabId); }
+    }
+    S.upsert('requests', upd);
+    S.log(me.id, fl.verb + ' ' + r.ref + ' «' + r.title + '»');
+    U.toast(fl.toast + extra);
+    setTimeout(render);
+    return '';
+  }
+  function rqAct(r, action) {
+    const fl = RQ_FLOW[action];
+    if (!fl) return;
+    if (!fl.note) { const err = rqApply(r, action); if (err) U.toast(err, 'bad'); return; }
+    U.modal({
+      title: fl.title + ' · ' + r.ref, size: 'sm',
+      body: '<p class="small">«' + h(r.title) + '»</p>' + U.field({ name: 'note', label: fl.label, type: 'textarea', required: fl.note === 'required', placeholder: fl.note === 'required' ? '' : 'اختياري' }),
+      submitText: fl.btn, submitClass: fl.danger ? 'btn-danger' : 'btn-primary',
+      onSubmit(form) {
+        const text = U.formData(form).note;
+        if (fl.note === 'required' && !text) return 'اكتب ' + fl.label.replace(/ \(.*\)$/, '') + '.';
+        return rqApply(r, action, text);
+      }
+    });
+  }
+
+  function requestModal(preType) {
+    if (!me.dept) { U.toast('حدد قسمك من الإعدادات أولًا', 'bad'); return; }
+    const depts = S.coll('departments').filter((d) => d.name !== me.dept);
+    const labsOf = (dn) => S.coll('labs').filter((l) => l.dept === dn);
+    const tiles = Object.keys(RQ_TYPE).map((k) => '<div class="type-tile"><input type="radio" name="type" id="rt-' + k + '" value="' + k + '"' + (k === (preType || 'loan') ? ' checked' : '') + '><label for="rt-' + k + '">' + icon(RQ_TYPE[k][1]) + '<b>' + RQ_TYPE[k][0] + '</b><span>' + RQ_TYPE[k][2] + '</span></label></div>').join('');
+    const itemRow = () => '<div class="item-row"><input class="input" data-k="name" placeholder="اسم البند" aria-label="اسم البند"><input class="input" data-k="qty" type="number" min="1" value="1" aria-label="الكمية"><input class="input unit" data-k="unit" placeholder="الوحدة" aria-label="الوحدة"><button type="button" class="icon-btn" data-rm aria-label="حذف البند">' + icon('trash') + '</button></div>';
+    const body =
+      '<div class="fieldset-title">نوع الطلب</div><div class="type-tiles">' + tiles + '</div>' +
+      '<div class="fieldset-title">بيانات الطلب · يُرسل باسم قسم ' + h(me.dept) + '</div>' +
+      U.formGrid([
+        { name: 'toDept', label: 'إلى قسم', type: 'select', required: true, placeholder: 'اختر القسم المستلم', options: depts.map((d) => ({ value: d.name, label: d.name + ' (' + d.code + ')' })) },
+        { name: 'priority', label: 'الأولوية', type: 'select', options: optsOf(TK_PRI), required: true },
+        { name: 'title', label: 'عنوان الطلب', required: true, span: true, placeholder: 'مثال: إعارة راسمي إشارة لتجربة الدوائر' },
+        { name: 'dueDate', label: 'مطلوب قبل', type: 'date', required: true, min: today() }
+      ], { priority: 'medium', dueDate: iso(S.util.workday(new Date(), 5)) }) +
+      '<div class="form-grid" data-for="loan transfer support"><div class="field span-2"><label for="f-deviceId">الجهاز</label><select class="select" id="f-deviceId" name="deviceId"></select><span class="hint" id="dev-hint"></span></div></div>' +
+      '<div class="form-grid" data-for="loan">' + U.field({ name: 'qty', label: 'الكمية', type: 'number', min: 1 }, 1) + '<div></div>' + U.field({ name: 'loanFrom', label: 'من تاريخ', type: 'date', min: today() }) + U.field({ name: 'loanTo', label: 'إلى تاريخ', type: 'date', min: today() }) + '</div>' +
+      '<div class="form-grid" data-for="lab"><div class="field span-2"><label for="f-labId">المعمل</label><select class="select" id="f-labId" name="labId"></select></div>' +
+      U.field({ name: 'date', label: 'التاريخ', type: 'date', min: today() }, iso(S.util.workday(new Date(), 2))) + U.field({ name: 'attendees', label: 'عدد الحضور', type: 'number', min: 1 }) + U.field({ name: 'start', label: 'من', type: 'time', step: 300 }, '10:00') + U.field({ name: 'end', label: 'إلى', type: 'time', step: 300 }, '11:40') + '</div>' +
+      '<div class="form-grid" data-for="transfer"><div class="field span-2"><label for="f-targetLabId">إلى معمل</label><select class="select" id="f-targetLabId" name="targetLabId"></select></div></div>' +
+      '<div data-for="supplies" style="display:flex;flex-direction:column;gap:8px"><div class="fieldset-title">البنود المطلوبة</div><div class="item-rows" id="item-rows">' + itemRow() + '</div><div><button type="button" class="btn btn-sm" id="add-item">' + icon('plus') + 'إضافة بند</button></div></div>' +
+      U.field({ name: 'description', label: 'الوصف والمبررات', type: 'textarea', placeholder: 'لماذا تحتاجون الطلب؟ وأي تفاصيل تساعد القسم المستلم على البت فيه.' });
+
+    U.modal({
+      title: 'طلب جديد إلى قسم آخر', body, submitText: 'إرسال الطلب',
+      onOpen(form) {
+        const typeOf = () => (form.querySelector('input[name=type]:checked') || {}).value || 'other';
+        const toSel = form.querySelector('#f-toDept'), devSel = form.querySelector('#f-deviceId'), labSel = form.querySelector('#f-labId'), tgtSel = form.querySelector('#f-targetLabId'), devHint = form.querySelector('#dev-hint');
+        const rows = form.querySelector('#item-rows');
+        const opt = (v, l, sel) => '<option value="' + h(v) + '"' + (sel ? ' selected' : '') + '>' + h(l) + '</option>';
+        const refill = () => {
+          const type = typeOf(), to = toSel.value;
+          form.querySelectorAll('[data-for]').forEach((el) => { el.hidden = !el.dataset.for.split(' ').includes(type); });
+          if (type === 'support' && !to && me.dept !== 'تقنية المعلومات') { toSel.value = 'تقنية المعلومات'; return refill(); }
+          let devs = [], hint = '';
+          if (type === 'loan') { devs = S.coll('devices').filter((d) => (lab(d.labId) || {}).dept === to && d.status === 'working'); hint = to ? 'الأجهزة العاملة في معامل قسم ' + to : 'اختر القسم أولًا'; }
+          if (type === 'transfer') { devs = S.coll('devices').filter((d) => (lab(d.labId) || {}).dept === me.dept && d.status !== 'retired'); hint = 'أجهزة معامل قسمك'; }
+          if (type === 'support') { devs = S.coll('devices').filter((d) => (lab(d.labId) || {}).dept === me.dept && d.status !== 'retired'); hint = 'اختياري: الجهاز المرتبط بالطلب في معامل قسمك'; }
+          const cur = devSel.value;
+          devSel.innerHTML = (type === 'support' ? opt('', 'بدون جهاز محدد') : opt('', devs.length ? 'اختر الجهاز' : 'لا توجد أجهزة متاحة')) + devs.map((d) => opt(d.id, d.tag + ' · ' + d.name + ' · ' + labName(d.labId), d.id === cur)).join('');
+          devHint.textContent = hint;
+          const ls = labsOf(to);
+          const curL = labSel.value, curT = tgtSel.value;
+          labSel.innerHTML = opt('', ls.length ? 'اختر المعمل' : 'لا توجد معامل لهذا القسم') + ls.filter((l) => l.status === 'active').map((l) => opt(l.id, l.name + ' · السعة ' + l.capacity, l.id === curL)).join('');
+          tgtSel.innerHTML = opt('', ls.length ? 'اختر المعمل' : 'لا توجد معامل لهذا القسم') + ls.map((l) => opt(l.id, l.name, l.id === curT)).join('');
+        };
+        form.addEventListener('change', (e) => { if (e.target.name === 'type' || e.target === toSel) refill(); });
+        form.querySelector('#add-item').addEventListener('click', () => { rows.insertAdjacentHTML('beforeend', itemRow()); rows.lastElementChild.querySelector('input').focus(); });
+        rows.addEventListener('click', (e) => { const b = e.target.closest('[data-rm]'); if (b && rows.children.length > 1) b.closest('.item-row').remove(); });
+        refill();
+      },
+      onSubmit(form) {
+        const d = U.formData(form);
+        const type = d.type;
+        if (!d.toDept) return 'اختر القسم المستلم.';
+        if (!d.title || d.title.length < 5) return 'اكتب عنوانًا واضحًا للطلب.';
+        if (!d.dueDate || d.dueDate < today()) return 'حدد تاريخًا مطلوبًا من اليوم فصاعدًا.';
+        const req = { type, title: d.title, fromDept: me.dept, toDept: d.toDept, requesterId: me.id, assigneeId: '', priority: d.priority, status: 'new', dueDate: d.dueDate, createdAt: today(), description: d.description || '', items: [] };
+        if (type === 'loan') {
+          if (!d.deviceId) return 'اختر الجهاز المطلوب إعارته.';
+          const qty = parseInt(d.qty, 10);
+          if (!(qty >= 1)) return 'الكمية يجب أن تكون 1 على الأقل.';
+          if (!d.loanFrom || !d.loanTo) return 'حدد فترة الإعارة.';
+          if (d.loanTo < d.loanFrom) return 'تاريخ الإرجاع يجب أن يكون بعد تاريخ الاستلام.';
+          Object.assign(req, { deviceId: d.deviceId, qty, loanFrom: d.loanFrom, loanTo: d.loanTo });
+        }
+        if (type === 'lab') {
+          const b = { labId: d.labId, title: d.title, date: d.date, start: d.start, end: d.end, attendees: parseInt(d.attendees, 10) };
+          if (!b.labId) return 'اختر المعمل المطلوب.';
+          const err = validateBooking(b);
+          if (err) return err;
+          Object.assign(req, { labId: b.labId, date: b.date, start: b.start, end: b.end, attendees: b.attendees });
+        }
+        if (type === 'transfer') {
+          if (!d.deviceId) return 'اختر الجهاز المراد نقله.';
+          if (!d.targetLabId) return 'اختر المعمل الذي سينقل إليه الجهاز.';
+          Object.assign(req, { deviceId: d.deviceId, targetLabId: d.targetLabId });
+        }
+        if (type === 'support' && d.deviceId) req.deviceId = d.deviceId;
+        if (type === 'supplies') {
+          req.items = [...form.querySelectorAll('.item-row')].map((row) => ({ name: row.querySelector('[data-k=name]').value.trim(), qty: parseInt(row.querySelector('[data-k=qty]').value, 10), unit: row.querySelector('[data-k=unit]').value.trim() })).filter((it) => it.name);
+          if (!req.items.length) return 'أضف بندًا واحدًا على الأقل.';
+          if (req.items.some((it) => !(it.qty >= 1))) return 'كمية كل بند يجب أن تكون 1 على الأقل.';
+        }
+        req.ref = S.nextRequestRef();
+        req.log = [{ at: new Date().toISOString(), userId: me.id, kind: 'status', status: 'new', text: '' }];
+        const saved = S.upsert('requests', req, 'rq');
+        S.log(me.id, 'أرسل الطلب ' + saved.ref + ' إلى قسم ' + saved.toDept);
+        U.toast('تم إرسال الطلب ' + saved.ref + ' إلى قسم ' + saved.toDept);
+        st.req.box = 'out'; st.req.group = 'all';
+        setTimeout(() => go('req-' + saved.id));
+      }
+    });
+  }
+
   /* ===== أدوات الفلترة ===== */
   function bindFilters(root, map, draw) {
     Object.keys(map).forEach((sel) => {
@@ -1127,7 +1508,7 @@
   }
 
   /* ===== الإجراءات ===== */
-  const VIEWS = { dashboard: viewDashboard, labs: viewLabs, devices: viewDevices, schedule: viewSchedule, bookings: viewBookings, maintenance: viewMaintenance, reports: viewReports, users: viewUsers, settings: viewSettings };
+  const VIEWS = { requests: () => viewRequests(''), dashboard: viewDashboard, labs: viewLabs, devices: viewDevices, schedule: viewSchedule, bookings: viewBookings, maintenance: viewMaintenance, reports: viewReports, users: viewUsers, settings: viewSettings };
   const withB = (fn) => (id) => { const b = S.byId('bookings', id); if (b) fn(b); };
   const ACTIONS = {
     logout() { S.log(me.id, 'سجّل الخروج'); S.session.clear(); me = null; location.hash = ''; render(); },
@@ -1188,6 +1569,9 @@
       const u = user(id); if (!u || u.id === me.id) return;
       U.confirmDialog({ title: 'حذف المستخدم', danger: true, confirmText: 'حذف', message: 'حذف حساب ' + u.name + '؟ تبقى حجوزاته وبلاغاته السابقة في السجل. يمكنك بدلًا من ذلك إيقاف الحساب.', onConfirm() { S.remove('users', id); S.log(me.id, 'حذف حساب ' + u.name); U.toast('تم حذف المستخدم'); setTimeout(render); } });
     },
+    newRequest() { requestModal(); },
+    reqAct(id) { const [rid, action] = id.split('|'); const r = S.byId('requests', rid); if (r) rqAct(r, action); },
+    schedLab(id) { st.schedule.lab = id; st.schedule.week = 0; go('schedule'); },
     exportBookings, exportDevices, exportTickets,
     exportJSON() { U.download('labms-backup-' + today() + '.json', JSON.stringify(S.data, null, 2), 'application/json'); U.toast('تم تنزيل النسخة الاحتياطية'); },
     resetData() {

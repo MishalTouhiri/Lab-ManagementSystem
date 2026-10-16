@@ -170,8 +170,130 @@
       { id: uid('a'), at: addDays(today, -6).toISOString(), userId: 'u1', text: 'غيّر حالة معمل الذكاء الاصطناعي إلى «تحت الصيانة»' }
     ];
 
-    return { version: 1, seededAt: new Date().toISOString(), users, labs, devices, bookings, tickets, activity, counters: { ticket: 1042 } };
+    const out = { version: 1, seededAt: new Date().toISOString(), users, labs, devices, bookings, tickets, activity, counters: { ticket: 1042 } };
+    migrate(out);
+    return out;
   }
+
+  /* ===== الأقسام والطلبات بين الأقسام ===== */
+  const LAB_DEPT = { L1: 'علوم الحاسب', L2: 'علوم الحاسب', L3: 'الفيزياء', L4: 'الكيمياء', L5: 'الهندسة الكهربائية', L6: 'علوم الحاسب' };
+  function seedDepartments() {
+    return [
+      { id: 'D1', code: 'IT', name: 'تقنية المعلومات', managerId: 'u1', ext: '2100', building: 'مبنى 1' },
+      { id: 'D2', code: 'CS', name: 'علوم الحاسب', managerId: 'u6', ext: '2210', building: 'مبنى 7' },
+      { id: 'D3', code: 'PHY', name: 'الفيزياء', managerId: 'u3', ext: '2340', building: 'مبنى 3' },
+      { id: 'D4', code: 'CHE', name: 'الكيمياء', managerId: 'u5', ext: '2355', building: 'مبنى 3' },
+      { id: 'D5', code: 'EE', name: 'الهندسة الكهربائية', managerId: 'u9', ext: '2470', building: 'مبنى 9' },
+      { id: 'D6', code: 'SWE', name: 'هندسة البرمجيات', managerId: 'u6', ext: '2215', building: 'مبنى 7' }
+    ];
+  }
+  function seedRequests(devices) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const wd = (n) => iso(workday(today, n));
+    const at = (days, hour) => { const d = addDays(today, days); d.setHours(hour, (hour * 7) % 60); return d.toISOString(); };
+    const devId = (tag) => (devices.find((d) => d.tag === tag) || {}).id || '';
+    const yr = today.getFullYear();
+    const ref = (n) => 'REQ-' + yr + '-' + String(n).padStart(4, '0');
+    return [
+      {
+        id: 'r142', ref: ref(142), type: 'other', title: 'حصر أجهزة معامل الحاسب لتحديث نظام التشغيل', fromDept: 'تقنية المعلومات', toDept: 'علوم الحاسب', requesterId: 'u1', assigneeId: '',
+        priority: 'low', status: 'new', dueDate: wd(7), createdAt: iso(today), items: [],
+        description: 'نحتاج قائمة بالأجهزة التي تعمل بنظام Windows 10 في معامل القسم، مع أرقام الأصول، لجدولة الترقية خلال الإجازة.',
+        log: [{ at: at(0, 9), userId: 'u1', kind: 'status', status: 'new', text: '' }]
+      },
+      {
+        id: 'r141', ref: ref(141), type: 'loan', title: 'إعارة راسمَي إشارة لتجربة الدوائر المتناوبة', fromDept: 'الفيزياء', toDept: 'الهندسة الكهربائية', requesterId: 'u3', assigneeId: 'u9',
+        priority: 'high', status: 'review', dueDate: wd(2), createdAt: iso(addDays(today, -1)), deviceId: devId('EE220-OS-03'), qty: 2, loanFrom: wd(3), loanTo: wd(5), items: [],
+        description: 'أحد راسمات الإشارة في معمل الفيزياء متوقف بانتظار المعايرة، ونحتاج جهازين لشعبتين من PHYS 102 الأسبوع القادم. نتعهد بإعادتهما بعد آخر تجربة.',
+        log: [
+          { at: at(-1, 10), userId: 'u3', kind: 'status', status: 'new', text: '' },
+          { at: at(-1, 13), userId: 'u9', kind: 'comment', text: 'متاح جهاز واحد مؤكد. الجهاز الثاني مرتبط بمحاضرة يوم الاثنين، سأتأكد من المشرف.' },
+          { at: at(0, 8), userId: 'u9', kind: 'status', status: 'review', text: '' }
+        ]
+      },
+      {
+        id: 'r140', ref: ref(140), type: 'supplies', title: 'مواد لتجربة التحليل الكهربائي', fromDept: 'الفيزياء', toDept: 'الكيمياء', requesterId: 'u3', assigneeId: '',
+        priority: 'medium', status: 'new', dueDate: wd(5), createdAt: iso(today),
+        items: [{ name: 'كبريتات النحاس CuSO₄', qty: 500, unit: 'غرام' }, { name: 'حمض الكبريتيك المخفف 1M', qty: 1, unit: 'لتر' }, { name: 'أقطاب جرافيت', qty: 10, unit: 'قطعة' }],
+        description: 'للعرض العملي في مقرر PHYS 102، الفصل الخاص بقوانين فاراداي.',
+        log: [{ at: at(0, 11), userId: 'u3', kind: 'status', status: 'new', text: '' }]
+      },
+      {
+        id: 'r139', ref: ref(139), type: 'support', title: 'ربط مطياف الأشعة بالشبكة لتصدير القراءات', fromDept: 'الكيمياء', toDept: 'تقنية المعلومات', requesterId: 'u5', assigneeId: 'u1',
+        priority: 'medium', status: 'progress', dueDate: wd(1), createdAt: iso(addDays(today, -5)), deviceId: devId('CHE305-SP-01'), items: [],
+        description: 'نحتاج نقطة شبكة في معمل CHE-305 وتثبيت برنامج LabSolutions على الحاسب المتصل بالمطياف.',
+        log: [
+          { at: at(-5, 9), userId: 'u5', kind: 'status', status: 'new', text: '' },
+          { at: at(-4, 10), userId: 'u1', kind: 'status', status: 'approved', text: 'تمت الموافقة، سيتم توفير نقطة شبكة.' },
+          { at: at(-2, 12), userId: 'u1', kind: 'status', status: 'progress', text: 'تم تمديد الكابل، متبقٍ تثبيت البرنامج.' }
+        ]
+      },
+      {
+        id: 'r138', ref: ref(138), type: 'lab', title: 'استخدام معمل الحاسب 1 لاختبار EE 220 العملي', fromDept: 'الهندسة الكهربائية', toDept: 'علوم الحاسب', requesterId: 'u9', assigneeId: 'u2',
+        priority: 'medium', status: 'approved', dueDate: wd(3), createdAt: iso(addDays(today, -3)), labId: 'L1', date: wd(3), start: '12:30', end: '14:10', attendees: 18, items: [],
+        description: 'الاختبار يحتاج برنامج Vivado، وهو مثبت على أجهزة معمل الحاسب 1 فقط.',
+        log: [
+          { at: at(-3, 9), userId: 'u9', kind: 'status', status: 'new', text: '' },
+          { at: at(-2, 11), userId: 'u2', kind: 'status', status: 'approved', text: 'تمت الموافقة وأُضيف الحجز إلى جدول المعمل.' }
+        ]
+      },
+      {
+        id: 'r137', ref: ref(137), type: 'transfer', title: 'نقل الطابعة ثلاثية الأبعاد إلى معمل الإلكترونيات', fromDept: 'علوم الحاسب', toDept: 'الهندسة الكهربائية', requesterId: 'u2', assigneeId: 'u9',
+        priority: 'low', status: 'info', dueDate: wd(6), createdAt: iso(addDays(today, -4)), deviceId: devId('AI301-PR-01'), targetLabId: 'L5', items: [],
+        description: 'معمل الذكاء الاصطناعي مغلق للصيانة، والطابعة يستخدمها فريق الروبوت أكثر من غيره.',
+        log: [
+          { at: at(-4, 10), userId: 'u2', kind: 'status', status: 'new', text: '' },
+          { at: at(-3, 9), userId: 'u9', kind: 'status', status: 'info', text: 'حددوا من سيكون مسؤول العهدة في القسم، وهل يشمل النقل خيوط الطباعة المتبقية؟' }
+        ]
+      },
+      {
+        id: 'r136', ref: ref(136), type: 'support', title: 'تثبيت LabVIEW على أجهزة معمل الفيزياء', fromDept: 'الفيزياء', toDept: 'تقنية المعلومات', requesterId: 'u3', assigneeId: 'u1',
+        priority: 'high', status: 'done', dueDate: iso(addDays(today, -5)), createdAt: iso(addDays(today, -9)), completedAt: iso(addDays(today, -6)), items: [],
+        description: 'النسخة الأكاديمية 2024، على 10 أجهزة.',
+        log: [
+          { at: at(-9, 9), userId: 'u3', kind: 'status', status: 'new', text: '' },
+          { at: at(-8, 10), userId: 'u1', kind: 'status', status: 'approved', text: '' },
+          { at: at(-7, 9), userId: 'u1', kind: 'status', status: 'progress', text: '' },
+          { at: at(-6, 14), userId: 'u1', kind: 'status', status: 'done', text: 'تم التثبيت وتفعيل الترخيص على الأجهزة العشرة.' },
+          { at: at(-6, 15), userId: 'u3', kind: 'comment', text: 'شكرًا، تم التأكد من عمل البرنامج.' }
+        ]
+      },
+      {
+        id: 'r135', ref: ref(135), type: 'loan', title: 'إعارة جهاز ليزر لعرض في يوم المهنة', fromDept: 'علوم الحاسب', toDept: 'الفيزياء', requesterId: 'u6', assigneeId: 'u3',
+        priority: 'medium', status: 'rejected', dueDate: iso(addDays(today, -2)), createdAt: iso(addDays(today, -6)), deviceId: devId('PHY110-LS-01'), qty: 1, loanFrom: iso(addDays(today, -2)), loanTo: iso(addDays(today, -2)), items: [],
+        description: 'لعرض تجربة الألياف الضوئية في جناح القسم.',
+        log: [
+          { at: at(-6, 10), userId: 'u6', kind: 'status', status: 'new', text: '' },
+          { at: at(-5, 12), userId: 'u3', kind: 'status', status: 'rejected', text: 'الجهاز مجدول لتجارب PHYS 230 في نفس اليوم. نقترح التنسيق للفصل القادم.' }
+        ]
+      },
+      {
+        id: 'r134', ref: ref(134), type: 'supplies', title: 'لوحات Raspberry Pi لمشاريع التخرج', fromDept: 'هندسة البرمجيات', toDept: 'تقنية المعلومات', requesterId: 'u6', assigneeId: 'u1',
+        priority: 'high', status: 'approved', dueDate: iso(addDays(today, -1)), createdAt: iso(addDays(today, -8)),
+        items: [{ name: 'Raspberry Pi 5 (8GB)', qty: 6, unit: 'قطعة' }, { name: 'بطاقة microSD سعة 64GB', qty: 6, unit: 'قطعة' }, { name: 'مزود طاقة USB-C 27W', qty: 6, unit: 'قطعة' }],
+        description: 'لستة فرق في مقرر SWE 497. التسليم قبل العرض الأول للمشاريع.',
+        log: [
+          { at: at(-8, 9), userId: 'u6', kind: 'status', status: 'new', text: '' },
+          { at: at(-7, 13), userId: 'u1', kind: 'status', status: 'approved', text: 'معتمد من الميزانية، بانتظار وصول الشحنة.' }
+        ]
+      }
+    ];
+  }
+  /* تضيف الأقسام والطلبات إلى بيانات محفوظة من إصدار سابق دون حذف أي شيء */
+  function migrate(d) {
+    let changed = false;
+    if (!Array.isArray(d.departments)) { d.departments = seedDepartments(); changed = true; }
+    if (!d.users.some((u) => u.id === 'u9')) {
+      d.users.push({ id: 'u9', name: 'د. سعود الغامدي', username: 'saud', password: 'saud123', role: 'faculty', email: 's.alghamdi@lab.local', phone: '0571234098', dept: 'الهندسة الكهربائية', active: true });
+      changed = true;
+    }
+    d.labs.forEach((l) => { if (!l.dept) { l.dept = LAB_DEPT[l.id] || d.departments[0].name; changed = true; } });
+    if (!Array.isArray(d.requests)) { d.requests = seedRequests(d.devices); changed = true; }
+    d.counters = d.counters || {};
+    if (!d.counters.req) { d.counters.req = 142; changed = true; }
+    return changed;
+  }
+  function nextRequestRef() { data.counters.req = (data.counters.req || 100) + 1; save(); return 'REQ-' + new Date().getFullYear() + '-' + String(data.counters.req).padStart(4, '0'); }
 
   let data = null;
   function load() {
@@ -180,6 +302,7 @@
       try { data = JSON.parse(raw); } catch (e) { data = null; }
     }
     if (!data || !Array.isArray(data.labs)) { data = seed(); save(); }
+    else if (migrate(data)) save();
     return data;
   }
   function save() { writeRaw(KEY, JSON.stringify(data)); }
@@ -191,6 +314,7 @@
     for (const k of need) if (!Array.isArray(obj[k])) throw new Error('الملف لا يحتوي على «' + k + '»');
     obj.activity = obj.activity || [];
     obj.counters = obj.counters || { ticket: 1000 + obj.tickets.length };
+    migrate(obj);
     data = obj; save();
   }
 
@@ -225,5 +349,5 @@
     set(k, v) { writeRaw('labms.pref.' + k, v); }
   };
 
-  window.Store = { load, save, reset, importJSON, coll, byId, upsert, remove, log, nextTicketRef, session, prefs, util: { iso, addDays, pad, uid, weekStart, workday, isWorkday }, get data() { return data; } };
+  window.Store = { load, save, reset, importJSON, coll, byId, upsert, remove, log, nextTicketRef, nextRequestRef, session, prefs, util: { iso, addDays, pad, uid, weekStart, workday, isWorkday }, get data() { return data; } };
 })();
