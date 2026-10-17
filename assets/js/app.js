@@ -233,7 +233,7 @@
       '<div class="brand"><div class="brand-mark"><small>LM</small>Lb</div><div><div class="brand-name">مِختبَر</div><div class="brand-sub">نظام إدارة المعامل</div></div></div>' +
       '<div><h2>كل معامل الكلية في لوحة واحدة.</h2><p class="lead">من الحرم إلى المعمل إلى المحطة إلى الجهاز: حجز بلا تعارض، تتبع كامل لكل جهاز ومعايرته، وبلاغات أعطال تمر على مشرف المعمل ثم الدعم الفني ثم لجنة المعامل.</p></div>' +
       '<div class="ptable" aria-hidden="true">' + cells + ghosts + '</div>' +
-      '<div class="foot">الإصدار 1.0 · تعمل البيانات محليًا على هذا الجهاز</div>' +
+      '<div class="foot">الإصدار 2.0 · ' + (S.mode === 'server' ? 'متصل بالخادم · قاعدة بيانات SQLite' : 'وضع العرض بدون خادم · البيانات في هذا المتصفح') + '</div>' +
       '</section>' +
       '<section class="login-form"><form id="login-form" novalidate>' +
       '<div><h1>تسجيل الدخول</h1><p class="muted small">أدخل اسم المستخدم وكلمة المرور.</p></div>' +
@@ -247,12 +247,12 @@
       '<div class="guest-links"><a class="btn" href="#report">' + icon('wrench') + 'الإبلاغ عن عطل بدون حساب</a><a class="btn" href="#track">' + icon('search') + 'تتبع بلاغ</a></div>' +
       '</form></section></div>';
     const form = document.getElementById('login-form');
-    const tryLogin = (u, p) => {
-      const found = S.coll('users').find((x) => x.username.toLowerCase() === u.toLowerCase() && x.password === p);
+    const tryLogin = async (u, p) => {
       if (!u || !p) return renderLogin('أدخل اسم المستخدم وكلمة المرور.', u);
-      if (!found) return renderLogin('اسم المستخدم أو كلمة المرور غير صحيحة.', u);
-      if (!found.active) return renderLogin('هذا الحساب موقوف. تواصل مع مدير النظام.', u);
-      S.session.set(found.id);
+      const btn = form.querySelector('[type=submit]');
+      btn.disabled = true; btn.textContent = 'جارٍ الدخول…';
+      try { await S.auth.login(u, p); }
+      catch (e) { return renderLogin(e.message, u); }
       if (route() !== 'dashboard') location.hash = 'dashboard'; else render();
     };
     form.addEventListener('submit', (e) => { e.preventDefault(); const d = U.formData(form); tryLogin(d.username, d.password); });
@@ -820,7 +820,7 @@
     const tk = { ref: S.nextTicketRef(), labId: d.labId, stationId: d.stationId, deviceIds: d.deviceIds, deviceId: d.deviceIds[0] || '', title: d.title, description: d.description, issueType: d.issueType, priority: d.priority, status: 'open', reporterId: uid0, assigneeId: l.supervisorId, createdAt: today(), resolvedAt: '', semesterId: currentSemester().id, attachments: d.attachments, log: [{ at: nowISO(), userId: uid0, kind: 'status', status: 'open', text: '' }] };
     if (d.guest) tk.guest = d.guest;
     const saved = S.upsert('tickets', tk, 'tk');
-    d.deviceIds.forEach((id) => { const dv = dev(id); if (dv && dv.status === 'working') setDevStatus(id, d.priority === 'urgent' ? 'broken' : 'maintenance', 'بسبب البلاغ ' + tk.ref); });
+    S.localOnly(() => d.deviceIds.forEach((id) => { const dv = dev(id); if (dv && dv.status === 'working') setDevStatus(id, d.priority === 'urgent' ? 'broken' : 'maintenance', 'بسبب البلاغ ' + tk.ref); }));
     S.log(uid0, (d.guest ? 'أبلغ زائر (' + d.guest.email + ') عن عطل ' : 'فتح بلاغ صيانة ') + tk.ref + ' «' + tk.title + '»');
     return saved;
   }
@@ -855,10 +855,10 @@
     if (action === 'start' && !t.assigneeId) changes.assigneeId = me.id;
     tkSave(t, changes, { kind: 'status', status: fl.to, text: text || '' });
     let back = 0;
-    tkDevices(t).forEach((d) => {
+    S.localOnly(() => tkDevices(t).forEach((d) => {
       if (fl.to === 'resolved' && (d.status === 'maintenance' || d.status === 'broken') && !S.coll('tickets').some((x) => x.id !== t.id && tkHas(x, d.id) && x.status !== 'resolved')) { setDevStatus(d.id, 'working', 'بعد حل البلاغ ' + t.ref); back++; }
       if (fl.to === 'open' && d.status === 'working') setDevStatus(d.id, 'maintenance', 'إعادة فتح البلاغ ' + t.ref);
-    });
+    }));
     S.log(me.id, fl.verb + ' ' + t.ref + ' «' + t.title + '»');
     U.toast(fl.toast + (back ? (back === 1 ? ' وعاد الجهاز للخدمة' : ' وعادت ' + back + ' أجهزة للخدمة') : ''));
     setTimeout(render);
@@ -918,7 +918,7 @@
           if (!ok && !note) return 'اكتب سبب الرفض.';
           tkSave(t, { approval: Object.assign({}, t.approval, { status: ok ? 'approved' : 'rejected', decidedBy: me.id, decidedAt: nowISO(), note: note || '' }) }, { kind: 'approval', decision: ok ? 'approved' : 'rejected', text: note || '' });
           let extra = '';
-          if (ok && t.approval.kind === 'retire') { tkDevices(t).forEach((d) => setDevStatus(d.id, 'retired', 'بقرار لجنة المعامل · ' + t.ref)); extra = ' وأُخرجت الأجهزة من الخدمة'; }
+          if (ok && t.approval.kind === 'retire') { S.localOnly(() => tkDevices(t).forEach((d) => setDevStatus(d.id, 'retired', 'بقرار لجنة المعامل · ' + t.ref))); extra = ' وأُخرجت الأجهزة من الخدمة'; }
           S.log(me.id, (ok ? 'اعتمد' : 'رفض') + ' طلب الموافقة على البلاغ ' + t.ref);
           U.toast((ok ? 'تم اعتماد الطلب' : 'تم رفض الطلب') + extra, ok ? 'ok' : 'bad');
           setTimeout(render);
@@ -941,7 +941,7 @@
     const internalOK = viewer !== 'public' && (canProcess(t) || canDecide());
     const log = (t.log || []).filter((e) => internalOK || !e.internal);
     return '<div class="thread">' + log.map((e, idx) => {
-      const name = e.userId ? userName(e.userId) : (t.guest ? reporterName(t) : 'زائر');
+      const name = e.userId ? (user(e.userId) ? userName(e.userId) : 'فريق المعامل') : (t.guest ? reporterName(t) : 'زائر');
       const att = e.attachments && e.attachments.length ? attGallery(e.attachments) : '';
       if (e.kind === 'comment') return '<div class="ev"><div class="avatar">' + h(U.initials(name)) + '</div><div style="min-width:0"><div class="hd"><b>' + h(name) + '</b>' + (e.internal ? '<span class="pill">ملاحظة داخلية</span>' : '') + '<time>' + U.timeAgo(e.at) + '</time></div><div class="bubble' + (e.internal ? ' internal' : '') + '">' + h(e.text) + '</div>' + att + '</div></div>';
       let verb = '', ic = 'refresh', pl = '';
@@ -1071,7 +1071,7 @@
   }
 
   /* ===== الواجهة العامة: إبلاغ الزوار وتتبع البلاغ ===== */
-  const pub = { done: null, track: null, trackErr: '' };
+  const pub = { done: null, trackItem: null, trackErr: '' };
   function renderPublic(r) {
     const nav = '<header class="pub-top"><a class="brand" href="#" style="text-decoration:none"><div class="brand-mark"><small>LM</small>Lb</div><div><div class="brand-name">مِختبَر</div><div class="brand-sub">نظام إدارة المعامل</div></div></a>' +
       '<nav class="pub-nav"><a href="#report" class="' + (r === 'report' ? 'on' : '') + '">' + icon('wrench') + 'الإبلاغ عن عطل</a><a href="#track" class="' + (r === 'track' ? 'on' : '') + '">' + icon('search') + 'تتبع بلاغ</a><a href="#" class="btn btn-sm">' + icon('key') + 'تسجيل الدخول</a></nav></header>';
@@ -1084,7 +1084,7 @@
     } else if (r === 'report') {
       body = '<form class="pub-card" id="pub-report" novalidate><div class="pub-head">' + icon('flask') + '<h1>الإبلاغ عن عطل</h1><p class="muted">لا تحتاج حسابًا. اكتب بريدك لتتابع البلاغ لاحقًا.</p></div><div class="form-error" hidden></div>' + ticketFormHTML(true) + '<button type="submit" class="btn btn-primary btn-block" style="height:46px">' + icon('send') + 'إرسال البلاغ</button></form>';
     } else {
-      const t = pub.track ? S.byId('tickets', pub.track) : null;
+      const t = pub.trackItem;
       body = '<form class="pub-card" id="pub-track" novalidate><div class="pub-head">' + icon('search') + '<h1>تتبع حالة البلاغ</h1><p class="muted">أدخل رقم البلاغ والبريد الذي استخدمته عند الإبلاغ.</p></div>' +
         (pub.trackErr ? '<div class="form-error">' + icon('alert') + '<span>' + h(pub.trackErr) + '</span></div>' : '') +
         U.formGrid([{ name: 'ref', label: 'رقم البلاغ', required: true, ltr: true, placeholder: 'MT-1043' }, { name: 'email', label: 'البريد الإلكتروني', type: 'email', required: true, ltr: true }], { ref: t ? t.ref : '', email: t && t.guest ? t.guest.email : '' }) +
@@ -1102,38 +1102,50 @@
     const rep = document.getElementById('pub-report');
     if (rep) {
       bindTicketForm(rep, {});
-      rep.addEventListener('submit', (e) => {
+      rep.addEventListener('submit', async (e) => {
         e.preventDefault();
         const res = readTicketForm(rep, true);
         const err = rep.querySelector('.form-error');
-        if (res.err) { err.innerHTML = icon('alert') + '<span>' + h(res.err) + '</span>'; err.hidden = false; err.scrollIntoView({ block: 'center' }); return; }
-        pub.done = createTicket(res.data);
+        const showErr = (m) => { err.innerHTML = icon('alert') + '<span>' + h(m) + '</span>'; err.hidden = false; err.scrollIntoView({ block: 'center' }); };
+        if (res.err) return showErr(res.err);
+        const btn = rep.querySelector('[type=submit]'); btn.disabled = true;
+        try { pub.done = S.mode === 'server' ? await S.pub.createTicket(res.data) : createTicket(res.data); }
+        catch (x) { btn.disabled = false; return showErr(x.message); }
         renderPublic('report');
         window.scrollTo(0, 0);
       });
     }
     const gt = document.getElementById('pub-go-track');
-    if (gt) gt.addEventListener('click', () => { pub.track = pub.done.id; pub.trackErr = ''; pub.done = null; location.hash = 'track'; });
+    if (gt) gt.addEventListener('click', () => { pub.trackItem = pub.done; pub.trackEmail = (pub.done.guest || {}).email || ''; pub.trackErr = ''; pub.done = null; location.hash = 'track'; });
     const nw = document.getElementById('pub-new');
     if (nw) nw.addEventListener('click', () => { pub.done = null; renderPublic('report'); });
     const tr = document.getElementById('pub-track');
-    if (tr) tr.addEventListener('submit', (e) => {
+    if (tr) tr.addEventListener('submit', async (e) => {
       e.preventDefault();
       const v = U.formData(tr);
-      const t = S.coll('tickets').find((x) => x.ref.toLowerCase() === (v.ref || '').toLowerCase());
       const email = (v.email || '').toLowerCase();
-      const ok = t && ((t.guest && t.guest.email === email) || (user(t.reporterId) || {}).email === email);
-      pub.track = ok ? t.id : null;
-      pub.trackErr = ok ? '' : 'لا يوجد بلاغ بهذا الرقم مسجل بهذا البريد. تأكد من الرقم والبريد.';
+      pub.trackEmail = email;
+      if (S.mode === 'server') {
+        try { pub.trackItem = await S.pub.track(v.ref, email); pub.trackErr = ''; }
+        catch (x) { pub.trackItem = null; pub.trackErr = x.message; }
+      } else {
+        const t = S.coll('tickets').find((x) => x.ref.toLowerCase() === (v.ref || '').toLowerCase());
+        const ok = t && ((t.guest && t.guest.email === email) || (user(t.reporterId) || {}).email === email);
+        pub.trackItem = ok ? t : null;
+        pub.trackErr = ok ? '' : 'لا يوجد بلاغ بهذا الرقم مسجل بهذا البريد. تأكد من الرقم والبريد.';
+      }
       renderPublic('track');
     });
     const pc = document.getElementById('pub-comment');
-    if (pc) pc.addEventListener('submit', (e) => {
+    if (pc) pc.addEventListener('submit', async (e) => {
       e.preventDefault();
       const text = (pc.querySelector('textarea').value || '').trim();
       if (!text) return;
-      const t = S.byId('tickets', pub.track);
-      S.upsert('tickets', Object.assign({}, t, { log: (t.log || []).concat([{ at: nowISO(), userId: '', kind: 'comment', text, internal: false }]) }));
+      const t = pub.trackItem;
+      if (S.mode === 'server') {
+        try { pub.trackItem = await S.pub.comment(t.ref, pub.trackEmail || (t.guest || {}).email || '', text); }
+        catch (x) { U.toast(x.message, 'bad'); return; }
+      } else pub.trackItem = S.upsert('tickets', Object.assign({}, t, { log: (t.log || []).concat([{ at: nowISO(), userId: '', kind: 'comment', text, internal: false }]) }));
       U.toast('أُرسلت رسالتك إلى فريق المعامل');
       renderPublic('track');
     });
@@ -1810,7 +1822,7 @@
         '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-act="exportJSON">' + icon('download') + 'نسخة احتياطية</button>' +
         '<label class="btn" for="import-file" style="cursor:pointer">' + icon('upload') + 'استعادة من ملف</label><input type="file" id="import-file" accept="application/json,.json" hidden>' +
         '<button class="btn btn-danger" data-act="resetData">' + icon('refresh') + 'إعادة البيانات التجريبية</button></div></div>') : '') +
-      card('عن النظام', '', '<dl class="dl"><dt>الإصدار</dt><dd>1.0</dd><dt>آخر تهيئة للبيانات</dt><dd>' + U.fmtDate(String(d.seededAt || '').slice(0, 10)) + '</dd><dt>التخزين</dt><dd>محلي على هذا المتصفح، بدون خادم</dd></dl>') +
+      card('عن النظام', '', '<dl class="dl"><dt>الإصدار</dt><dd>1.0</dd><dt>آخر تهيئة للبيانات</dt><dd>' + U.fmtDate(String(d.seededAt || '').slice(0, 10)) + '</dd><dt>التخزين</dt><dd>' + (S.mode === 'server' ? 'خادم Node.js · قاعدة بيانات SQLite' : 'محلي على هذا المتصفح، بدون خادم') + '</dd></dl>') +
       '</div></div>';
     return {
       title: 'الإعدادات', crumb: 'الإدارة', html,
@@ -1823,23 +1835,21 @@
           const errEl = form.querySelector('.form-error');
           const fail = (m) => { errEl.innerHTML = icon('alert') + '<span>' + h(m) + '</span>'; errEl.hidden = false; };
           if (!v.name) return fail('الاسم مطلوب.');
-          if (v.password) {
-            if (v.current !== me.password) return fail('كلمة المرور الحالية غير صحيحة.');
-            if (v.password.length < 6) return fail('كلمة المرور الجديدة يجب ألا تقل عن 6 أحرف.');
-          }
-          const upd = { id: me.id, name: v.name, email: v.email, phone: v.phone };
-          if (v.password) upd.password = v.password;
-          S.upsert('users', upd);
-          U.toast(v.password ? 'تم حفظ الملف وتغيير كلمة المرور' : 'تم حفظ الملف الشخصي');
-          render();
+          if (v.password && v.password.length < 6) return fail('كلمة المرور الجديدة يجب ألا تقل عن 6 أحرف.');
+          (async () => {
+            if (v.password) { try { await S.auth.changePassword(me.id, v.current, v.password); } catch (x) { return fail(x.message); } }
+            S.upsert('users', { id: me.id, name: v.name, email: v.email, phone: v.phone });
+            U.toast(v.password ? 'تم حفظ الملف وتغيير كلمة المرور' : 'تم حفظ الملف الشخصي');
+            render();
+          })();
         });
         const file = root.querySelector('#import-file');
         if (file) file.addEventListener('change', () => {
           const fl = file.files[0];
           if (!fl) return;
           const reader = new FileReader();
-          reader.onload = () => {
-            try { S.importJSON(String(reader.result)); U.toast('تمت استعادة البيانات'); if (!user(me.id)) S.session.clear(); render(); }
+          reader.onload = async () => {
+            try { await S.importJSON(String(reader.result)); U.toast('تمت استعادة البيانات'); if (!user(me.id)) S.session.clear(); render(); }
             catch (err) { U.toast('تعذرت الاستعادة: ' + err.message, 'bad'); }
           };
           reader.readAsText(fl);
@@ -2083,17 +2093,17 @@
     if (action === 'approve' && r.type === 'lab' && r.labId) {
       const err = validateBooking({ labId: r.labId, title: r.title, date: r.date, start: r.start, end: r.end, attendees: r.attendees });
       if (err) return 'تعذّر إضافة الحجز إلى جدول المعمل: ' + err;
-      const bk = S.upsert('bookings', { labId: r.labId, title: r.title + ' (' + dCode(r.fromDept) + ')', userId: r.requesterId, date: r.date, start: r.start, end: r.end, attendees: r.attendees, status: 'approved', notes: 'من الطلب ' + r.ref, createdAt: today() }, 'bk');
+      const bk = S.localOnly(() => S.upsert('bookings', { labId: r.labId, title: r.title + ' (' + dCode(r.fromDept) + ')', userId: r.requesterId, date: r.date, start: r.start, end: r.end, attendees: r.attendees, status: 'approved', notes: 'من الطلب ' + r.ref, createdAt: today() }, 'bk'));
       upd.bookingId = bk.id;
       extra = ' وأُضيف الحجز إلى جدول المعمل';
     }
     if ((action === 'reject' || action === 'cancel') && r.bookingId) {
       const bk = S.byId('bookings', r.bookingId);
-      if (bk && bk.status === 'approved') S.upsert('bookings', Object.assign({}, bk, { status: 'cancelled', reason: 'أُلغي الطلب ' + r.ref }));
+      if (bk && bk.status === 'approved') S.localOnly(() => S.upsert('bookings', Object.assign({}, bk, { status: 'cancelled', reason: 'أُلغي الطلب ' + r.ref })));
     }
     if (action === 'done' && r.type === 'transfer' && r.deviceId && r.targetLabId) {
       const d = dev(r.deviceId);
-      if (d) { moveDev(d.id, r.targetLabId, 'بموجب الطلب ' + r.ref); extra = ' ونُقل الجهاز ' + d.tag + ' إلى ' + labName(r.targetLabId); }
+      if (d) { S.localOnly(() => moveDev(d.id, r.targetLabId, 'بموجب الطلب ' + r.ref)); extra = ' ونُقل الجهاز ' + d.tag + ' إلى ' + labName(r.targetLabId); }
     }
     S.upsert('requests', upd);
     S.log(me.id, fl.verb + ' ' + r.ref + ' «' + r.title + '»');
@@ -2325,7 +2335,7 @@
   const VIEWS = { campuses: viewCampuses, approvals: viewApprovals, reference: viewReference, requests: () => viewRequests(''), dashboard: viewDashboard, labs: viewLabs, devices: viewDevices, schedule: viewSchedule, bookings: viewBookings, maintenance: viewMaintenance, reports: viewReports, users: viewUsers, settings: viewSettings };
   const withB = (fn) => (id) => { const b = S.byId('bookings', id); if (b) fn(b); };
   const ACTIONS = {
-    logout() { S.session.clear(); me = null; location.hash = ''; render(); },
+    async logout() { await S.auth.logout(); me = null; location.hash = ''; render(); },
     openNav() { document.getElementById('shell').classList.add('nav-open'); },
     closeNav() { document.getElementById('shell').classList.remove('nav-open'); },
     toggleTheme() { S.prefs.set('theme', isDark() ? 'light' : 'dark'); render(); },
@@ -2417,9 +2427,9 @@
     reqAct(id) { const [rid, action] = id.split('|'); const r = S.byId('requests', rid); if (r) rqAct(r, action); },
     schedLab(id) { st.schedule.lab = id; st.schedule.week = 0; go('schedule'); },
     exportBookings, exportDevices, exportTickets,
-    exportJSON() { U.download('labms-backup-' + today() + '.json', JSON.stringify(S.data, null, 2), 'application/json'); U.toast('تم تنزيل النسخة الاحتياطية'); },
+    async exportJSON() { try { U.download('labms-backup-' + today() + '.json', JSON.stringify(await S.exportJSON(), null, 2), 'application/json'); U.toast('تم تنزيل النسخة الاحتياطية'); } catch (e) { U.toast(e.message, 'bad'); } },
     resetData() {
-      U.confirmDialog({ title: 'إعادة البيانات التجريبية', danger: true, confirmText: 'إعادة التهيئة', message: 'ستُحذف كل التعديلات وتعود البيانات التجريبية الأصلية. يفضل أخذ نسخة احتياطية أولًا.', onConfirm() { S.reset(); S.session.set('u1'); U.toast('تمت إعادة البيانات التجريبية'); setTimeout(render); } });
+      U.confirmDialog({ title: 'إعادة البيانات التجريبية', danger: true, confirmText: 'إعادة التهيئة', message: 'ستُحذف كل التعديلات وتعود البيانات التجريبية الأصلية. يفضل أخذ نسخة احتياطية أولًا.', onConfirm() { S.reset().then(() => { S.session.set('u1'); U.toast('تمت إعادة البيانات التجريبية'); render(); }).catch((e) => U.toast(e.message, 'bad')); } });
     }
   };
 
@@ -2463,6 +2473,13 @@
 
   document.documentElement.lang = 'ar';
   document.documentElement.dir = 'rtl';
-  S.load();
-  render();
+  S.on('error', (e) => U.toast(e.message, 'bad'));
+  S.on('changed', (info) => {
+    // تحديث من مستخدم آخر: لا نقاطع من يكتب أو من فتح نافذة
+    const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if (info && info.remote && (typing || document.querySelector('.modal-backdrop'))) return;
+    render();
+  });
+  document.getElementById('app').innerHTML = '<div class="boot">' + icon('flask') + '<span>جارٍ تحميل المنصة…</span></div>';
+  S.init().then(render).catch((e) => { document.getElementById('app').innerHTML = '<div class="boot">' + icon('alert') + '<span>تعذّر تحميل البيانات: ' + h(e.message) + '</span></div>'; });
 })();

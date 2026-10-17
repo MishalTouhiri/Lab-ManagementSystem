@@ -4,3 +4,7 @@ Thumbs.db
 *.log
 *.zip
 *.bundle
+data/
+*.db
+*.db-wal
+*.db-shm

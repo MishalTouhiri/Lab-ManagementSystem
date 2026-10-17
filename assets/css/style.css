@@ -781,3 +781,7 @@ kbd { font-family: var(--f-mono); font-size: 11px; padding: 1px 6px; border-radi
   .step { font-size: 10.5px; }
   .step small { display: none; }
 }
+
+/* شاشة التحميل */
+.boot { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--muted); }
+.boot svg { width: 40px; height: 40px; color: var(--accent); }

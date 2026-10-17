@@ -1,0 +1,5 @@
+.git
+data
+*.zip
+*.bundle
+node_modules

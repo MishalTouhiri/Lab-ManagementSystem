@@ -1,0 +1,13 @@
+{
+  "name": "labms-mukhtabar",
+  "version": "2.0.0",
+  "description": "مِختبَر — نظام إدارة المعامل: واجهة أمامية + خادم Node.js + قاعدة بيانات SQLite",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "reset-db": "node -e \"require('fs').rmSync('data',{recursive:true,force:true});console.log('حُذفت قاعدة البيانات، ستُنشأ من جديد عند التشغيل')\""
+  },
+  "engines": { "node": ">=22.5.0" },
+  "license": "UNLICENSED"
+}

@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
-# تشغيل المنصة على http://localhost:8080
+# تشغيل الخادم على http://localhost:3000
 cd "$(dirname "$0")"
-URL="http://localhost:8080"
-( sleep 1; (command -v xdg-open >/dev/null && xdg-open "$URL") || (command -v open >/dev/null && open "$URL") ) >/dev/null 2>&1 &
-if command -v python3 >/dev/null; then python3 -m http.server 8080
-elif command -v npx >/dev/null; then npx --yes serve -l 8080 .
-else echo "افتح الملف index.html مباشرة في المتصفح"; fi
+if ! command -v node >/dev/null; then
+  echo "Node.js غير مثبت. ثبّت Node.js 24 من https://nodejs.org أو افتح index.html للعرض بدون خادم"; exit 1
+fi
+( sleep 1; (command -v xdg-open >/dev/null && xdg-open http://localhost:3000) || (command -v open >/dev/null && open http://localhost:3000) ) >/dev/null 2>&1 &
+exec node server.js
