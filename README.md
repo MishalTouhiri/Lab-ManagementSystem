@@ -1,8 +1,39 @@
-# مِختبَر — نظام إدارة المعامل
+# 🧪 مِختبَر — Lab Management System
+
+Arabic (RTL) web platform for running a college's labs: conflict-free lab bookings, a device register with calibration
+alerts, a three-level maintenance workflow (lab supervisor → IT support → labs committee), requests between departments,
+reports, and role-based access. Node.js + SQLite backend, or a browser-only demo mode with no install.
+
+![Node.js](https://img.shields.io/badge/Node.js-22.5%2B-339933?logo=nodedotjs&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-node%3Asqlite-003B57?logo=sqlite&logoColor=white)
+![JavaScript](https://img.shields.io/badge/Vanilla-JS-F7DF1E?logo=javascript&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
+![RTL](https://img.shields.io/badge/UI-Arabic%20RTL-0f766e)
+
+<img src="docs/screenshots/dashboard.webp" alt="Dashboard — لوحة التحكم">
+
+| Issues — البلاغات | Weekly schedule — الجدول الأسبوعي |
+|:---:|:---:|
+| <img src="docs/screenshots/issues.webp" alt="Issues"> | <img src="docs/screenshots/schedule.webp" alt="Weekly schedule"> |
+| **Devices — الأجهزة** | **Sign-in — تسجيل الدخول** |
+| <img src="docs/screenshots/devices.webp" alt="Devices"> | <img src="docs/screenshots/login.webp" alt="Sign-in"> |
+
+**Features:** dashboard KPIs · campus → lab → station → device hierarchy · bookings that block time clashes, over-capacity and
+out-of-hours slots · device history and calibration tracking · issues with priorities, attachments and committee approval ·
+guest issue reporting and tracking · requests between departments with reference numbers · reports · users, departments
+and a permission matrix · light/dark themes · CSV export · JSON backup/restore.
+
+**Tech stack:** HTML, CSS and vanilla JavaScript (no framework) · Node.js built-in `http` server · SQLite via `node:sqlite` ·
+scrypt password hashing and HttpOnly session cookies · Docker / docker compose.
+
+**Quick start:** `node server.js` (Node.js 22.5+) then open http://localhost:3000 — or open `index.html` directly for the
+browser-only demo. Demo accounts and full documentation (Arabic) below.
+
+---
 
 منصة ويب عربية لإدارة معامل الكلية: حجز المعامل بدون تعارض، سجل الأجهزة ومواعيد معايرتها، بلاغات الصيانة، التقارير، وإدارة المستخدمين والصلاحيات.
 
-تعمل المنصة بالكامل داخل المتصفح. لا تحتاج قاعدة بيانات ولا خادمًا ولا تثبيت أي برنامج.
+تعمل مع خادم Node.js وقاعدة بيانات SQLite، ويمكن أيضًا فتحها مباشرة في المتصفح بدون خادم ولا تثبيت (وضع العرض).
 
 ## التشغيل على الجهاز
 
